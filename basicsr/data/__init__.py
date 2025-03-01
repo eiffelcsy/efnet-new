@@ -44,9 +44,6 @@ def create_dataset(dataset_opt):
     if dataset_cls is None:
         raise ValueError(f'Dataset {dataset_type} is not found.')
     
-    if dataset_type == "H5ImageDataset":
-        dataset = concatenate_h5_datasets(dataset_cls, dataset_opt)
-    
     else:
         dataset = dataset_cls(dataset_opt)
 

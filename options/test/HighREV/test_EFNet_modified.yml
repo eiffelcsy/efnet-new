@@ -1,6 +1,6 @@
 # general settings
 name: Test_EFNet_modified
-model_type: ImageEventRestorationModel
+model_type: TestImageEventRestorationModel
 scale: 1
 num_gpu: 1
 manual_seed: 10

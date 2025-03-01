@@ -99,7 +99,7 @@ class TestImageEventRestorationModel(BaseModel):
 
         self.lq = data['frame'].to(self.device)
         self.voxel=data['voxel'].to(self.device)
-        self.seq_name = data ['seq'] # add seq name
+        self.seq_name = data ['image_name'] # add seq name
         if self.opt['dataset_name'] == 'REBlur':
             # 260->256 if REBlur
             self.lq = self.lq[:,:,:256,:]

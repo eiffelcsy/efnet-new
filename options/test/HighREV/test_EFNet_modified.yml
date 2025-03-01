@@ -21,16 +21,9 @@ datasets:
     io_backend:
       type: disk
 
-    gt_size: 256
+    gt_size: ~
     use_hflip: false
     use_rot: false
-
-    use_shuffle: true
-    num_worker_per_gpu: 3
-    batch_size_per_gpu: 8 # 4 for 2080, 8 for titan
-    dataset_enlarge_ratio: 1  # accelarate, equals to the num_gpu
-    prefetch_mode: cpu
-    num_prefetch_queue: 2
 
 dataset_name: HighREV
 
@@ -46,7 +39,8 @@ path:
   pretrain_network_g: ~
   strict_load_g: true
   resume_state: ~
-  training_states: ~
+  # training_states: ~
+  results_root: results/
 
 # validation settings
 val:
@@ -73,8 +67,8 @@ logger:
   save_checkpoint_freq: !!float 2e4
   use_tb_logger: true
   wandb:
-    project: efnet_fusion
-    resume_id: efnet_fusion
+    project: efnet_fusion_test
+    resume_id: efnet_fusion_test
 
 # dist test settings
 dist_params:

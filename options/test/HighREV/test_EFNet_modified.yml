@@ -1,0 +1,82 @@
+# general settings
+name: Test_EFNet_modified
+model_type: ImageEventRestorationModel
+scale: 1
+num_gpu: 1
+manual_seed: 10
+
+# dataset and data loader settings
+datasets:
+  test:
+    name: highrev-test
+    type: VoxelnpzPngSingleDeblurDataset
+
+    # dataroot: /cluster/work/cvl/leisun/Datasets/GOPRO_11_video_1skip_blur_multigt_mini/ # debug
+    dataroot: /common/scratch/users/e/eiffelchong.2023/HighREV/val
+    dataroot_voxel: /common/scratch/users/e/eiffelchong.2023/HighREV/val/voxel
+
+    # voxel settings
+    norm_voxel: true
+
+    io_backend:
+      type: disk
+
+    gt_size: 256
+    use_hflip: false
+    use_rot: false
+
+    use_shuffle: true
+    num_worker_per_gpu: 3
+    batch_size_per_gpu: 8 # 4 for 2080, 8 for titan
+    dataset_enlarge_ratio: 1  # accelarate, equals to the num_gpu
+    prefetch_mode: cpu
+    num_prefetch_queue: 2
+
+dataset_name: HighREV
+
+# network structures
+network_g:
+  type: EFNet
+  wf: 64 
+  fuse_before_downsample: true
+
+
+# path
+path:
+  pretrain_network_g: ~
+  strict_load_g: true
+  resume_state: ~
+  training_states: ~
+
+# validation settings
+val:
+  save_img: true
+  save_gt: true
+  grids: ~
+  crop_size: ~
+  max_minibatch: 8
+
+  metrics:
+    psnr:
+      type: calculate_psnr
+      crop_border: 0
+      test_y_channel: false
+
+    ssim:
+      type: calculate_ssim
+      crop_border: 0
+      test_y_channel: false   
+
+
+logger:
+  print_freq: 200
+  save_checkpoint_freq: !!float 2e4
+  use_tb_logger: true
+  wandb:
+    project: efnet_fusion
+    resume_id: efnet_fusion
+
+# dist test settings
+dist_params:
+  backend: nccl
+  port: 29500

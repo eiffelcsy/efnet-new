@@ -418,14 +418,15 @@ class Attention(nn.Module):
 ##########################################################################
 ## Coarse-to-fine Fusion
 class ChannelAttentionBlock(nn.Module):
-    def __init__(self, n_feat, reduction=16, bias=True, res_scale=1.0):
+    def __init__(self, n_feat, reduction=16, bias=True,
+                 act=nn.ReLU(True), res_scale=1.0):
         super(ChannelAttentionBlock, self).__init__()
 
         self.res_scale = res_scale
 
         self.conv1 = nn.Conv2d(n_feat, n_feat, kernel_size=3,
                                padding=1, bias=bias)
-        self.act = nn.ReLU(True)
+        self.act = act
         self.conv2 = nn.Conv2d(n_feat, n_feat, kernel_size=3,
                                padding=1, bias=bias)
         self.ca_conv1 = nn.Conv2d(n_feat, n_feat // reduction,

@@ -29,7 +29,7 @@ dataset_name: HighREV
 
 # network structures
 network_g:
-  type: EFNet
+  type: EFNet_modified
   wf: 64 
   fuse_before_downsample: true
 

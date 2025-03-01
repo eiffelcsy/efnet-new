@@ -148,9 +148,7 @@ class EFNet_modified(nn.Module):
         out_2 = self.last(x2)
         out_2 = out_2 + image
 
-        x3 = self.fine_fusion(x2, out_1)
-
-        out_3 = self.last(x3)
+        out_3 = self.fine_fusion(x2, out_1)
         out_3 = out_3 + image
 
         return [out_1, out_2, out_3]
@@ -293,6 +291,9 @@ class CoarseToFineFusionModule(nn.Module):
 
         self.fusion_block = ChannelAttentionBlock(n_feat=feat_channels*2, reduction=reduction, act=nn.ReLU(True))
 
+        self.final_conv = nn.Conv2d(feat_channels*2, 3, kernel_size=3, padding=1, bias=True)
+
+
     def forward(self, x2, out_1):
         out_1_map = self.coarse_map(out_1)
 
@@ -300,7 +301,9 @@ class CoarseToFineFusionModule(nn.Module):
 
         fused = self.fusion_block(fused)
 
-        return fused
+        out_3 = self.final_conv(fused)
+
+        return out_3
 
 
 

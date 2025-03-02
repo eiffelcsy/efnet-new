@@ -289,7 +289,9 @@ class CoarseToFineFusionModule(nn.Module):
         
         self.coarse_map = nn.Conv2d(3, feat_channels, kernel_size=1, padding=0)
 
-        self.fusion_block = ChannelAttentionBlock(n_feat=feat_channels*2, reduction=reduction, act=nn.ReLU(True))
+        self.fusion_block_1 = ChannelAttentionBlock(n_feat=feat_channels*2, reduction=reduction, act=nn.ReLU(True))
+
+        self.fusion_block_2 = ChannelAttentionBlock(n_feat=feat_channels*2, reduction=reduction, act=nn.ReLU(True))
 
         self.final_conv = nn.Conv2d(feat_channels*2, 3, kernel_size=3, padding=1, bias=True)
 
@@ -299,7 +301,8 @@ class CoarseToFineFusionModule(nn.Module):
 
         fused = torch.cat([x2, out_1_map], dim=1)
 
-        fused = self.fusion_block(fused)
+        fused = self.fusion_block_1(fused)
+        fused = self.fusion_block_2(fused)
 
         out_3 = self.final_conv(fused)
 

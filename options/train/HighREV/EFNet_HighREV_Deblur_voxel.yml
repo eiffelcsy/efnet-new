@@ -1,5 +1,5 @@
 # general settings
-name: EFNet_highrev_single_deblur_voxel_debug  # add debug for quick debug
+name: EFNet_fusion  # add debug for quick debug
 model_type: ImageEventRestorationModel
 scale: 1
 num_gpu:  1 #4
@@ -12,8 +12,8 @@ datasets:
 
     # dataroot: /work/lei_sun/HighREV/train
     # dataroot_voxel: /work/lei_sun/HighREV_voxel/train/voxel
-    dataroot: /PATH/TO/DATASET/HighREV/train
-    dataroot_voxel: /PATH/TO/DATASET/HighREV_voxel/train/voxel
+    dataroot: /common/scratch/users/e/eiffelchong.2023/HighREV/train
+    dataroot_voxel: /common/scratch/users/e/eiffelchong.2023/HighREV/train/voxel
 
     gt_size: 256
     # keep true if use events
@@ -39,8 +39,8 @@ datasets:
 
     # dataroot: /work/lei_sun/HighREV/val
     # dataroot_voxel: /work/lei_sun/HighREV_voxel/val/voxel
-    dataroot: /PATH/TO/DATASET/HighREV/train
-    dataroot_voxel: /PATH/TO/DATASET/HighREV_voxel/train/voxel
+    dataroot: /common/scratch/users/e/eiffelchong.2023/HighREV/val
+    dataroot_voxel: /common/scratch/users/e/eiffelchong.2023/HighREV/val/voxel
 
 
     gt_size: ~
@@ -56,7 +56,7 @@ dataset_name: HighREV
 
 # network structures
 network_g:
-  type: EFNet
+  type: EFNet_modified
   wf: 64 
   fuse_before_downsample: true
 
@@ -114,8 +114,8 @@ logger:
   save_checkpoint_freq: !!float 2e4
   use_tb_logger: true
   wandb:
-    project: your_project_name
-    resume_id: x
+    project: efnet-fusion
+    resume_id: resume-efnet-fusion
 
 # dist training settings
 dist_params:

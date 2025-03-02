@@ -115,7 +115,7 @@ logger:
   use_tb_logger: true
   wandb:
     project: efnet-fusion
-    resume_id: resume-efnet-fusion
+    resume_id: efnet-fusion-resume
 
 # dist training settings
 dist_params:

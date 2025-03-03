@@ -198,9 +198,9 @@ class EFNet_modified(nn.Module):
         out_2 = self.last(x2)
         out_2 = out_2 + image
 
-        out_1_map = self.coarse_map(out_1)
+        out_2_map = self.coarse_map(out_2)
 
-        fused_coarse, fused_feat = self.fine_fusion(out_1_map, x2)
+        fused_coarse, fused_feat = self.fine_fusion(out_2_map, x2)
         out_3 = self.last(fused_feat)
         out_3 = out_3 + image
 

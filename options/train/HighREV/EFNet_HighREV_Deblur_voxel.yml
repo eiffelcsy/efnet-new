@@ -1,5 +1,5 @@
 # general settings
-name: EFNet_fusion  # add debug for quick debug
+name: EFNet_freq_fusion  # add debug for quick debug
 model_type: ImageEventRestorationModel
 scale: 1
 num_gpu:  1 #4

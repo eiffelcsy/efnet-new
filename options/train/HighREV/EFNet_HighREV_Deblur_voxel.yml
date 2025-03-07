@@ -56,7 +56,7 @@ dataset_name: HighREV
 
 # network structures
 network_g:
-  type: EFNet_modified
+  type: EFNet_freq_fusion
   wf: 64 
   fuse_before_downsample: true
 
@@ -114,8 +114,8 @@ logger:
   save_checkpoint_freq: !!float 2e4
   use_tb_logger: true
   wandb:
-    project: efnet-fusion
-    resume_id: ~
+    project: efnet-freq-fusion
+    resume_id: resume-freq-fusion-0
 
 # dist training settings
 dist_params:

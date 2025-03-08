@@ -322,8 +322,8 @@ class CoarseToFineFusionModule(nn.Module):
 class FCFE(nn.Module):
     def __init__(self, channels):
         super(FCFE, self).__init__()
-        self.norm_event = nn.LayerNorm([channels, 256, 256])
-        self.norm_image = nn.LayerNorm([channels, 256, 256])
+        # self.norm_event = nn.LayerNorm([channels, 256, 256])
+        # self.norm_image = nn.LayerNorm([channels, 256, 256])
         self.conv1x1_1 = nn.Conv2d(channels * 2, channels, kernel_size=1)
         self.dw_conv_1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, groups=channels)
         self.dw_conv_2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, groups=channels)

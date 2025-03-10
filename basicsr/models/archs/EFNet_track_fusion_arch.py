@@ -57,7 +57,63 @@ class SAM(nn.Module):
         return x1, img
 
 
-class EFNet_modified(nn.Module):
+class InlineTrackerBlock(nn.Module):
+    """
+    Inline feature tracking block that computes optical flow between image and event features,
+    then warps the image features using the computed flow.
+    
+    Args:
+        channels (int): Number of channels in input feature maps
+    """
+    def __init__(self, channels):
+        super(InlineTrackerBlock, self).__init__()
+        # Flow estimation network: concatenated features -> 2-channel flow field
+        self.flow_conv1 = nn.Conv2d(channels * 2, channels, kernel_size=3, padding=1, bias=True)
+        self.flow_relu = nn.LeakyReLU(0.2, inplace=False)
+        self.flow_conv2 = nn.Conv2d(channels, 2, kernel_size=3, padding=1, bias=True)
+        
+    def forward(self, img_feat, event_feat):
+        """
+        Args:
+            img_feat (Tensor): Image branch features [B, C, H, W]
+            event_feat (Tensor): Event branch features [B, C, H, W]
+            
+        Returns:
+            Tensor: Warped image features
+        """
+        # Concatenate features along channel dimension
+        concat_feat = torch.cat([img_feat, event_feat], dim=1)
+        
+        # Estimate flow field (x, y displacements)
+        flow = self.flow_conv1(concat_feat)
+        flow = self.flow_relu(flow)
+        flow = self.flow_conv2(flow)
+        
+        # Create sampling grid for warping
+        B, _, H, W = img_feat.size()
+        device = img_feat.device
+        
+        # Create normalized 2D grid [-1, 1]
+        xx = torch.arange(0, W, device=device).view(1, -1).repeat(H, 1).float() / (W-1) * 2 - 1
+        yy = torch.arange(0, H, device=device).view(-1, 1).repeat(1, W).float() / (H-1) * 2 - 1
+        
+        # Stack and reshape to [B, H, W, 2]
+        grid = torch.stack([xx, yy], dim=0).unsqueeze(0).repeat(B, 1, 1, 1)
+        grid = grid.permute(0, 2, 3, 1)
+        
+        # Scale flow to normalized coordinates [-1, 1]
+        flow_x = flow[:, 0, :, :] / ((W-1) / 2)
+        flow_y = flow[:, 1, :, :] / ((H-1) / 2)
+        flow_scaled = torch.stack([flow_x, flow_y], dim=-1)
+        
+        # Add flow to grid and perform warping
+        grid_flow = grid + flow_scaled.permute(0, 2, 3, 1)
+        warped_feat = F.grid_sample(img_feat, grid_flow, mode='bilinear', padding_mode='border', align_corners=True)
+        
+        return warped_feat
+
+
+class EFNet_track_fusion(nn.Module):
     def __init__(
         self,
         in_chn=3,
@@ -67,11 +123,13 @@ class EFNet_modified(nn.Module):
         fuse_before_downsample=True,
         relu_slope=0.2,
         num_heads=[1, 2, 4],
+        use_tracking=False,
     ):
-        super(EFNet_modified, self).__init__()
+        super(EFNet_track_fusion, self).__init__()
         self.depth = depth
         self.fuse_before_downsample = fuse_before_downsample
         self.num_heads = num_heads
+        self.use_tracking = use_tracking
         self.down_path_1 = nn.ModuleList()
         self.down_path_2 = nn.ModuleList()
         self.conv_01 = nn.Conv2d(in_chn, wf, 3, 1, 1)
@@ -91,6 +149,7 @@ class EFNet_modified(nn.Module):
                     downsample,
                     relu_slope,
                     num_heads=self.num_heads[i],
+                    use_tracking=self.use_tracking,
                 )
             )
             self.down_path_2.append(
@@ -100,6 +159,7 @@ class EFNet_modified(nn.Module):
                     downsample,
                     relu_slope,
                     use_emgc=downsample,
+                    use_tracking=self.use_tracking,
                 )
             )
             # ev encoder
@@ -137,16 +197,20 @@ class EFNet_modified(nn.Module):
         # EVencoder
         ev = []
         e1 = self.conv_ev1(event)
+        ev_features = []
         for i, down in enumerate(self.down_path_ev):
             if i < self.depth - 1:
                 e1, e1_up = down(e1, self.fuse_before_downsample)
                 if self.fuse_before_downsample:
                     ev.append(e1_up)
+                    ev_features.append(e1_up)
                 else:
                     ev.append(e1)
+                    ev_features.append(e1)
             else:
                 e1 = down(e1, self.fuse_before_downsample)
                 ev.append(e1)
+                ev_features.append(e1)
 
         # stage 1
         x1 = self.conv_01(image)
@@ -160,6 +224,7 @@ class EFNet_modified(nn.Module):
                     x1,
                     event_filter=ev[i],
                     merge_before_downsample=self.fuse_before_downsample,
+                    event_feat=ev_features[i] if self.use_tracking else None,
                 )
                 encs.append(x1_up)
 
@@ -171,6 +236,7 @@ class EFNet_modified(nn.Module):
                     x1,
                     event_filter=ev[i],
                     merge_before_downsample=self.fuse_before_downsample,
+                    event_feat=ev_features[i] if self.use_tracking else None,
                 )
 
         for i, up in enumerate(self.up_path_1):
@@ -185,12 +251,12 @@ class EFNet_modified(nn.Module):
         for i, down in enumerate(self.down_path_2):
             if (i + 1) < self.depth:
                 if mask is not None:
-                    x2, x2_up = down(x2, encs[i], decs[-i - 1], mask=masks[i])
+                    x2, x2_up = down(x2, encs[i], decs[-i - 1], mask=masks[i], event_feat=ev_features[i] if self.use_tracking else None)
                 else:
-                    x2, x2_up = down(x2, encs[i], decs[-i - 1])
+                    x2, x2_up = down(x2, encs[i], decs[-i - 1], event_feat=ev_features[i] if self.use_tracking else None)
                 blocks.append(x2_up)
             else:
-                x2 = down(x2)
+                x2 = down(x2, event_feat=ev_features[i] if self.use_tracking else None)
 
         for i, up in enumerate(self.up_path_2):
             x2 = up(x2, self.skip_conv_2[i](blocks[-i - 1]))
@@ -220,13 +286,14 @@ class EFNet_modified(nn.Module):
 
 class UNetConvBlock(nn.Module):
     def __init__(
-        self, in_size, out_size, downsample, relu_slope, use_emgc=False, num_heads=None
+        self, in_size, out_size, downsample, relu_slope, use_emgc=False, num_heads=None, use_tracking=False
     ):  # cat
         super(UNetConvBlock, self).__init__()
         self.downsample = downsample
         self.identity = nn.Conv2d(in_size, out_size, 1, 1, 0)
         self.use_emgc = use_emgc
         self.num_heads = num_heads
+        self.use_tracking = use_tracking
 
         self.conv_1 = nn.Conv2d(in_size, out_size, kernel_size=3, padding=1, bias=True)
         self.relu_1 = nn.LeakyReLU(relu_slope, inplace=False)
@@ -241,6 +308,10 @@ class UNetConvBlock(nn.Module):
 
         if downsample:
             self.downsample = conv_down(out_size, out_size, bias=False)
+            
+        # Initialize feature tracker if needed
+        if self.use_tracking:
+            self.feature_tracker = InlineTrackerBlock(out_size)
 
         if self.num_heads is not None:
             self.image_event_transformer = EventImage_ChannelAttentionTransformerBlock(
@@ -259,36 +330,40 @@ class UNetConvBlock(nn.Module):
         mask=None,
         event_filter=None,
         merge_before_downsample=True,
+        event_feat=None,  # Added parameter for event features
     ):
         out = self.conv_1(x)
 
-        out_conv1 = self.relu_1(out)
-        out_conv2 = self.relu_2(self.conv_2(out_conv1))
+        out = self.relu_1(out)
+        out = self.conv_2(out)
+        out = self.relu_2(out)
+        out = out + self.identity(x)
 
-        out = out_conv2 + self.identity(x)
+        if enc is not None and dec is not None and self.use_emgc:
+            # Skip existing EMGC code since we're just adding feature tracking
+            if mask is not None:
+                out_enc = self.emgc_enc(enc) + self.emgc_enc_mask((1 - mask) * enc)
+                out_dec = self.emgc_dec(dec) + self.emgc_dec_mask(mask * dec)
+                out = out + out_enc + out_dec
 
-        if enc is not None and dec is not None and mask is not None:
-            assert self.use_emgc
-            out_enc = self.emgc_enc(enc) + self.emgc_enc_mask((1 - mask) * enc)
-            out_dec = self.emgc_dec(dec) + self.emgc_dec_mask(mask * dec)
-            out = out + out_enc + out_dec
+        if self.num_heads is not None and event_filter is not None:
+            # Skip existing transformer code
+            if merge_before_downsample:
+                out = self.image_event_transformer(out, event_filter)
 
-        if event_filter is not None and merge_before_downsample:
-            # b, c, h, w = out.shape
-            out = self.image_event_transformer(out, event_filter)
+        # Apply feature tracking if enabled and event features are provided
+        if self.use_tracking and event_feat is not None:
+            out = self.feature_tracker(out, event_feat)
 
         if self.downsample:
             out_down = self.downsample(out)
-            if not merge_before_downsample:
+            if not merge_before_downsample and self.num_heads is not None and event_filter is not None:
                 out_down = self.image_event_transformer(out_down, event_filter)
-
             return out_down, out
-
         else:
-            if merge_before_downsample:
-                return out
-            else:
+            if not merge_before_downsample and self.num_heads is not None and event_filter is not None:
                 out = self.image_event_transformer(out, event_filter)
+            return out
 
 
 class UNetEVConvBlock(nn.Module):
@@ -411,8 +486,8 @@ if __name__ == "__main__":
     B, C, H, W = 1, 3, 256, 256
     image = torch.randn(B, C, H, W)
     event = torch.randn(B, 6, H, W)
-    model = EFNet_modified()
+    model = EFNet_track_fusion()
     outs = model(image, event)
     for i, o in enumerate(outs, start=1):
-        print(f"Output {i} shape: {o.shape}")  # [B,3,H,W] for out_1/out_2/out_3
+        print(f"Output {i} shape: {o.shape}")
     print("Test forward pass done!")

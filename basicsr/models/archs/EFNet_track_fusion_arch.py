@@ -142,6 +142,7 @@ class EFNet_track_fusion(nn.Module):
         for i in range(depth):
             downsample = True if (i + 1) < depth else False
 
+            self.use_tracking = True if i in [0, 1] else False
             self.down_path_1.append(
                 UNetConvBlock(
                     prev_channels,

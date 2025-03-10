@@ -36,7 +36,7 @@ network_g:
 
 # path
 path:
-  pretrain_network_g: ~
+  pretrain_network_g: /common/home/users/e/eiffelchong.2023/efnet-new/experiments/EFNet_fusion/models/net_g_200000.pth
   strict_load_g: true
   resume_state: ~
   # training_states: ~
@@ -45,7 +45,7 @@ path:
 # validation settings
 val:
   save_img: true
-  save_gt: true
+  save_gt: false
   grids: ~
   crop_size: ~
   max_minibatch: 8

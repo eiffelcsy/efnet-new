@@ -57,21 +57,104 @@ class SAM(nn.Module):
         return x1, img
 
 
+class ConvLSTMCell(nn.Module):
+    """
+    Convolutional LSTM cell for refining optical flow with temporal context.
+    
+    Args:
+        input_dim (int): Number of channels in input
+        hidden_dim (int): Number of channels in hidden state and cell state
+        kernel_size (int): Size of the convolutional kernel
+        bias (bool): Whether to add bias term
+    """
+    def __init__(self, input_dim, hidden_dim, kernel_size, bias=True):
+        super(ConvLSTMCell, self).__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.kernel_size = kernel_size
+        self.padding = kernel_size // 2
+        self.bias = bias
+        
+        # Gates: input, forget, cell, output
+        self.conv = nn.Conv2d(
+            in_channels=self.input_dim + self.hidden_dim,
+            out_channels=4 * self.hidden_dim,  # for the four gates
+            kernel_size=self.kernel_size,
+            padding=self.padding,
+            bias=self.bias
+        )
+        
+    def forward(self, input_tensor, cur_state):
+        """
+        Args:
+            input_tensor (Tensor): Input to the LSTM cell [B, input_dim, H, W]
+            cur_state (tuple): Current state (h, c) [B, hidden_dim, H, W] each
+            
+        Returns:
+            tuple: Updated hidden state and cell state
+        """
+        h_cur, c_cur = cur_state
+        
+        # Concatenate input and hidden state along channel dimension
+        combined = torch.cat([input_tensor, h_cur], dim=1)
+        
+        # Compute gates (Input, Forget, Cell, Output)
+        conv_output = self.conv(combined)
+        
+        # Split along channel dimension
+        cc_i, cc_f, cc_o, cc_g = torch.split(conv_output, self.hidden_dim, dim=1)
+        
+        # Apply activations and compute new states
+        i = torch.sigmoid(cc_i)
+        f = torch.sigmoid(cc_f)
+        o = torch.sigmoid(cc_o)
+        g = torch.tanh(cc_g)
+        
+        c_next = f * c_cur + i * g
+        h_next = o * torch.tanh(c_next)
+        
+        return h_next, c_next
+
+
 class InlineTrackerBlock(nn.Module):
     """
-    Inline feature tracking block that computes optical flow between image and event features,
-    then warps the image features using the computed flow.
+    Enhanced inline feature tracking block that computes optical flow between image and event features,
+    then refines the flow using a ConvLSTM to incorporate temporal context, and finally
+    warps the image features using the refined flow.
     
     Args:
         channels (int): Number of channels in input feature maps
+        lstm_hidden_dim (int): Number of channels in the LSTM hidden state
     """
-    def __init__(self, channels):
+    def __init__(self, channels, lstm_hidden_dim=64):
         super(InlineTrackerBlock, self).__init__()
         # Flow estimation network: concatenated features -> 2-channel flow field
         self.flow_conv1 = nn.Conv2d(channels * 2, channels, kernel_size=3, padding=1, bias=True)
         self.flow_relu = nn.LeakyReLU(0.2, inplace=False)
         self.flow_conv2 = nn.Conv2d(channels, 2, kernel_size=3, padding=1, bias=True)
         
+        # LSTM refinement components
+        self.lstm_hidden_dim = lstm_hidden_dim
+        
+        # Feature encoder for LSTM input
+        self.feature_encoder = nn.Conv2d(channels * 2 + 2, lstm_hidden_dim, kernel_size=3, padding=1, bias=True)
+        self.feature_encoder_act = nn.LeakyReLU(0.2, inplace=False)
+        
+        # ConvLSTM for flow refinement
+        self.conv_lstm = ConvLSTMCell(
+            input_dim=lstm_hidden_dim,
+            hidden_dim=lstm_hidden_dim,
+            kernel_size=3,
+            bias=True
+        )
+        
+        # Flow decoder to generate refined flow from LSTM output
+        self.flow_decoder = nn.Conv2d(lstm_hidden_dim, 2, kernel_size=3, padding=1, bias=True)
+        
+        # Initialize LSTM states to None (will be created on first forward pass)
+        self.lstm_h = None
+        self.lstm_c = None
+
     def forward(self, img_feat, event_feat):
         """
         Args:
@@ -81,17 +164,39 @@ class InlineTrackerBlock(nn.Module):
         Returns:
             Tensor: Warped image features
         """
+        # Get batch and spatial dimensions
+        B, C, H, W = img_feat.size()
+        device = img_feat.device
+        
         # Concatenate features along channel dimension
         concat_feat = torch.cat([img_feat, event_feat], dim=1)
         
-        # Estimate flow field (x, y displacements)
-        flow = self.flow_conv1(concat_feat)
-        flow = self.flow_relu(flow)
-        flow = self.flow_conv2(flow)
+        # Estimate initial flow field (x, y displacements)
+        flow_features = self.flow_conv1(concat_feat)
+        flow_features = self.flow_relu(flow_features)
+        initial_flow = self.flow_conv2(flow_features)
         
-        # Create sampling grid for warping
-        B, _, H, W = img_feat.size()
-        device = img_feat.device
+        # Apply LSTM refinement if enabled
+        if self.lstm_h is None or self.lstm_c is None or self.lstm_h.size(0) != B:
+            self.lstm_h = torch.zeros(B, self.lstm_hidden_dim, H, W, device=device)
+            self.lstm_c = torch.zeros(B, self.lstm_hidden_dim, H, W, device=device)
+            
+            # Prepare LSTM input by concatenating features and initial flow
+            lstm_input_features = torch.cat([concat_feat, initial_flow], dim=1)
+            lstm_input_features = self.feature_encoder(lstm_input_features)
+            lstm_input_features = self.feature_encoder_act(lstm_input_features)
+            
+            # Update LSTM states
+            self.lstm_h, self.lstm_c = self.conv_lstm(lstm_input_features, (self.lstm_h, self.lstm_c))
+            
+            # Decode LSTM output to get refined flow
+            flow_refinement = self.flow_decoder(self.lstm_h)
+            
+            # Add refinement to initial flow
+            flow = initial_flow + flow_refinement
+        else:
+            # Use initial flow directly if LSTM refinement is disabled
+            flow = initial_flow
         
         # Create normalized 2D grid [-1, 1]
         xx = torch.arange(0, W, device=device).view(1, -1).repeat(H, 1).float() / (W-1) * 2 - 1
@@ -112,8 +217,16 @@ class InlineTrackerBlock(nn.Module):
         
         return warped_feat
 
+    def reset_states(self):
+        """
+        Reset LSTM states between sequences.
+        Call this method when processing a new sequence.
+        """
+        self.lstm_h = None
+        self.lstm_c = None
 
-class EFNet_track_fusion(nn.Module):
+
+class EFNet_att_track_fusion(nn.Module):
     def __init__(
         self,
         in_chn=3,
@@ -123,9 +236,9 @@ class EFNet_track_fusion(nn.Module):
         fuse_before_downsample=True,
         relu_slope=0.2,
         num_heads=[1, 2, 4],
-        use_tracking=False,
+        use_tracking=True,
     ):
-        super(EFNet_track_fusion, self).__init__()
+        super(EFNet_att_track_fusion, self).__init__()
         self.depth = depth
         self.fuse_before_downsample = fuse_before_downsample
         self.num_heads = num_heads
@@ -142,7 +255,9 @@ class EFNet_track_fusion(nn.Module):
         for i in range(depth):
             downsample = True if (i + 1) < depth else False
 
-            self.use_tracking = True if i in [0, 1] else False
+            # Only enable tracking for the first two layers
+            layer_use_tracking = use_tracking and i in [0, 1]
+            
             self.down_path_1.append(
                 UNetConvBlock(
                     prev_channels,
@@ -150,7 +265,7 @@ class EFNet_track_fusion(nn.Module):
                     downsample,
                     relu_slope,
                     num_heads=self.num_heads[i],
-                    use_tracking=self.use_tracking,
+                    use_tracking=layer_use_tracking,
                 )
             )
             self.down_path_2.append(
@@ -160,7 +275,7 @@ class EFNet_track_fusion(nn.Module):
                     downsample,
                     relu_slope,
                     use_emgc=downsample,
-                    use_tracking=self.use_tracking,
+                    use_tracking=layer_use_tracking,
                 )
             )
             # ev encoder
@@ -284,10 +399,23 @@ class EFNet_track_fusion(nn.Module):
                 if not m.bias is None:
                     nn.init.constant_(m.bias, 0)
 
+    def reset_lstm_states(self):
+        """
+        Reset all LSTM states in the network.
+        Call this method when processing a new sequence.
+        """
+        for i in range(min(2, self.depth)):  # Only reset first two layers where tracking is used
+            if hasattr(self.down_path_1[i], 'feature_tracker') and self.down_path_1[i].use_tracking:
+                self.down_path_1[i].feature_tracker.reset_states()
+            
+            if hasattr(self.down_path_2[i], 'feature_tracker') and self.down_path_2[i].use_tracking:
+                self.down_path_2[i].feature_tracker.reset_states()
+
 
 class UNetConvBlock(nn.Module):
     def __init__(
-        self, in_size, out_size, downsample, relu_slope, use_emgc=False, num_heads=None, use_tracking=False
+        self, in_size, out_size, downsample, relu_slope, use_emgc=False, num_heads=None, 
+        use_tracking=False
     ):  # cat
         super(UNetConvBlock, self).__init__()
         self.downsample = downsample
@@ -312,7 +440,10 @@ class UNetConvBlock(nn.Module):
             
         # Initialize feature tracker if needed
         if self.use_tracking:
-            self.feature_tracker = InlineTrackerBlock(out_size)
+            self.feature_tracker = InlineTrackerBlock(
+                out_size, 
+                lstm_hidden_dim=out_size,  # Match output size for LSTM hidden dimension
+            )
 
         if self.num_heads is not None:
             self.image_event_transformer = EventImage_ChannelAttentionTransformerBlock(
@@ -487,7 +618,7 @@ if __name__ == "__main__":
     B, C, H, W = 1, 3, 256, 256
     image = torch.randn(B, C, H, W)
     event = torch.randn(B, 6, H, W)
-    model = EFNet_track_fusion()
+    model = EFNet_att_track_fusion()
     outs = model(image, event)
     for i, o in enumerate(outs, start=1):
         print(f"Output {i} shape: {o.shape}")

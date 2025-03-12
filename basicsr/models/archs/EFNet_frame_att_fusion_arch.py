@@ -59,15 +59,18 @@ class SAM(nn.Module):
 
 class FrameAttentionFusion(nn.Module):
     """
-    Applies a self-attention mechanism on a 4D feature map (B, C, H, W)
-    by flattening the spatial dimensions, performing multi-head self-attention,
-    and then reshaping back to the original size.
+    Applies self-attention on non-overlapping windows of a 4D feature map (B, C, H, W).
+    The feature map is partitioned into windows of size window_size x window_size,
+    and self-attention is applied within each window, then the outputs are merged back.
     """
-    def __init__(self, in_channels, num_heads=4, dropout=0.0):
+    def __init__(self, in_channels, window_size=8, num_heads=4, dropout=0.0):
         super(FrameAttentionFusion, self).__init__()
         self.in_channels = in_channels
-        # Using MultiheadAttention with batch_first=True so that input shape is (B, L, C)
-        self.attention = nn.MultiheadAttention(embed_dim=in_channels, num_heads=num_heads,
+        self.window_size = window_size
+        self.num_heads = num_heads
+        
+        # Multi-head attention expects input shape (B, L, C) with batch_first=True
+        self.attention = nn.MultiheadAttention(embed_dim=in_channels, num_heads=num_heads, 
                                                dropout=dropout, batch_first=True)
         self.norm1 = nn.LayerNorm(in_channels)
         self.ffn = nn.Sequential(
@@ -80,20 +83,69 @@ class FrameAttentionFusion(nn.Module):
     def forward(self, x):
         # x: (B, C, H, W)
         B, C, H, W = x.shape
-        # Flatten spatial dimensions: (B, L, C) where L = H * W
-        x_flat = x.view(B, C, H * W).transpose(1, 2)
-        # Save residual
-        residual = x_flat
-        # Apply self-attention (query, key, value all equal to x_flat)
-        attn_out, _ = self.attention(x_flat, x_flat, x_flat)
-        # Add & norm
+        ws = self.window_size
+        
+        # For very small feature maps, use global attention instead of windowed attention
+        if H <= ws or W <= ws:
+            # Fall back to global attention for small feature maps
+            # Flatten spatial dimensions: (B, L, C) where L = H * W
+            x_flat = x.view(B, C, H * W).transpose(1, 2)
+            
+            # Apply self-attention globally
+            residual = x_flat
+            attn_out, _ = self.attention(x_flat, x_flat, x_flat)
+            x_attn = self.norm1(residual + attn_out)
+            
+            # FFN
+            ffn_out = self.ffn(x_attn)
+            x_ffn = self.norm2(x_attn + ffn_out)
+            
+            # Reshape back
+            return x_ffn.transpose(1, 2).view(B, C, H, W)
+
+        # Pad if needed to make H and W multiples of window_size
+        pad_h = (ws - H % ws) % ws
+        pad_w = (ws - W % ws) % ws
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, pad_w, 0, pad_h), mode='constant', value=0)
+            H_padded, W_padded = H + pad_h, W + pad_w
+        else:
+            H_padded, W_padded = H, W
+
+        # Partition into windows
+        num_windows_h = H_padded // ws
+        num_windows_w = W_padded // ws
+        
+        # Reshape to (B, C, num_windows_h, ws, num_windows_w, ws)
+        x_windows = x.view(B, C, num_windows_h, ws, num_windows_w, ws)
+        # Permute to (B, num_windows_h, num_windows_w, ws, ws, C)
+        x_windows = x_windows.permute(0, 2, 4, 3, 5, 1).contiguous()
+        # Flatten each window: shape (B * num_windows_h * num_windows_w, ws*ws, C)
+        x_windows = x_windows.view(B * num_windows_h * num_windows_w, ws * ws, C)
+
+        # Save residual for skip connection
+        residual = x_windows
+
+        # Apply multi-head self-attention within each window
+        attn_out, _ = self.attention(x_windows, x_windows, x_windows)
         x_attn = self.norm1(residual + attn_out)
-        # Feed-forward network block with skip connection
+
+        # Apply feed-forward network with skip connection
         ffn_out = self.ffn(x_attn)
         x_ffn = self.norm2(x_attn + ffn_out)
-        # Reshape back to (B, C, H, W)
-        out = x_ffn.transpose(1, 2).view(B, C, H, W)
-        return out
+
+        # Reshape back to original spatial layout:
+        # (B, num_windows_h, num_windows_w, ws, ws, C)
+        x_windows = x_ffn.view(B, num_windows_h, num_windows_w, ws, ws, C)
+        # Permute to (B, C, num_windows_h, ws, num_windows_w, ws)
+        x_windows = x_windows.permute(0, 5, 1, 3, 2, 4).contiguous()
+        # Merge windows: (B, C, H, W)
+        x_out = x_windows.view(B, C, H_padded, W_padded)
+
+        # Remove padding if it was added
+        if pad_h > 0 or pad_w > 0:
+            x_out = x_out[:, :, :H, :W]
+        return x_out
 
 
 class EFNet_frame_att_fusion(nn.Module):
@@ -106,11 +158,13 @@ class EFNet_frame_att_fusion(nn.Module):
         fuse_before_downsample=True,
         relu_slope=0.2,
         num_heads=[1, 2, 4],
+        memory_efficient=False,
     ):
         super(EFNet_frame_att_fusion, self).__init__()
         self.depth = depth
         self.fuse_before_downsample = fuse_before_downsample
         self.num_heads = num_heads
+        self.memory_efficient = memory_efficient
         self.down_path_1 = nn.ModuleList()
         self.down_path_2 = nn.ModuleList()
         self.conv_01 = nn.Conv2d(in_chn, wf, 3, 1, 1)
@@ -122,6 +176,11 @@ class EFNet_frame_att_fusion(nn.Module):
         prev_channels = self.get_input_chn(wf)
         for i in range(depth):
             downsample = True if (i + 1) < depth else False
+            
+            # In memory efficient mode, only apply attention at the lowest resolution
+            use_heads = None
+            if not memory_efficient or i == depth - 1:
+                use_heads = self.num_heads[i]
 
             self.down_path_1.append(
                 UNetConvBlock(
@@ -129,7 +188,7 @@ class EFNet_frame_att_fusion(nn.Module):
                     (2**i) * wf,
                     downsample,
                     relu_slope,
-                    num_heads=self.num_heads[i],
+                    num_heads=use_heads,
                 )
             )
             self.down_path_2.append(
@@ -293,9 +352,15 @@ class UNetConvBlock(nn.Module):
             
         self.use_frame_attention = self.num_heads is not None
         if self.use_frame_attention:
+            # Adjust window size based on expected feature map size
+            # For deeper layers (with downsampling), use smaller windows
+            # For shallower layers, use larger windows
+            window_size = 4 if downsample else 8
+            
             self.frame_attention = FrameAttentionFusion(
                 in_channels=out_size,
-                num_heads=4,
+                window_size=window_size,
+                num_heads=min(4, out_size // 16),  # Ensure num_heads doesn't exceed feature dimension
                 dropout=0.0
             )
 
@@ -469,8 +534,19 @@ if __name__ == "__main__":
     B, C, H, W = 1, 3, 256, 256
     image = torch.randn(B, C, H, W)
     event = torch.randn(B, 6, H, W)
+    
+    # Test regular mode
+    print("Testing regular mode...")
     model = EFNet_frame_att_fusion()
     outs = model(image, event)
     for i, o in enumerate(outs, start=1):
-        print(f"Output {i} shape: {o.shape}")  # [B,3,H,W] for out_1/out_2/out_3
-    print("Test forward pass done!")
+        print(f"Output {i} shape: {o.shape}")  # [B,3,H,W] for out_1/out_3
+    
+    # Test memory-efficient mode
+    print("\nTesting memory-efficient mode...")
+    model_efficient = EFNet_frame_att_fusion(memory_efficient=True)
+    outs_efficient = model_efficient(image, event)
+    for i, o in enumerate(outs_efficient, start=1):
+        print(f"Output {i} shape: {o.shape}")  # [B,3,H,W] for out_1/out_3
+    
+    print("\nTest forward pass done!")

@@ -18,36 +18,6 @@ from basicsr.models.archs.arch_util import (
 from torch.nn import functional as F
 
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import math
-
-class ConvLSTMCell(nn.Module):
-    def __init__(self, input_dim, hidden_dim, kernel_size, bias=True):
-        super(ConvLSTMCell, self).__init__()
-        padding = kernel_size // 2
-        self.conv = nn.Conv2d(in_channels=input_dim + hidden_dim,
-                              out_channels=4 * hidden_dim,
-                              kernel_size=kernel_size,
-                              padding=padding,
-                              bias=bias)
-        self.hidden_dim = hidden_dim
-        
-    def forward(self, input_tensor, cur_state):
-        h_cur, c_cur = cur_state
-        combined = torch.cat([input_tensor, h_cur], dim=1)
-        conv_output = self.conv(combined)
-        (cc_i, cc_f, cc_o, cc_g) = torch.split(conv_output, self.hidden_dim, dim=1)
-        i = torch.sigmoid(cc_i)
-        f = torch.sigmoid(cc_f)
-        o = torch.sigmoid(cc_o)
-        g = torch.tanh(cc_g)
-        c_next = f * c_cur + i * g
-        h_next = o * torch.tanh(c_next)
-        return h_next, c_next
-
-
 def conv3x3(in_chn, out_chn, bias=True):
     layer = nn.Conv2d(in_chn, out_chn, kernel_size=3, stride=1, padding=1, bias=bias)
     return layer
@@ -87,7 +57,119 @@ class SAM(nn.Module):
         return x1, img
 
 
-class EFNet_tracking(nn.Module):
+class ConvLSTMCell(nn.Module):
+    def __init__(self, input_dim, hidden_dim, kernel_size, bias=True):
+        super(ConvLSTMCell, self).__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.kernel_size = kernel_size
+        self.padding = kernel_size // 2
+        self.bias = bias
+        
+        self.conv = nn.Conv2d(
+            in_channels=self.input_dim + self.hidden_dim,
+            out_channels=4 * self.hidden_dim,
+            kernel_size=self.kernel_size,
+            padding=self.padding,
+            bias=self.bias
+        )
+        
+    def forward(self, input_tensor, cur_state):
+        h_cur, c_cur = cur_state
+        
+        combined = torch.cat([input_tensor, h_cur], dim=1)
+        
+        conv_output = self.conv(combined)
+        
+        cc_i, cc_f, cc_o, cc_g = torch.split(conv_output, self.hidden_dim, dim=1)
+        
+        i = torch.sigmoid(cc_i)
+        f = torch.sigmoid(cc_f)
+        o = torch.sigmoid(cc_o)
+        g = torch.tanh(cc_g)
+        
+        c_next = f * c_cur + i * g
+        h_next = o * torch.tanh(c_next)
+        
+        return h_next, c_next
+
+
+class InlineTrackerBlock(nn.Module):
+
+    def __init__(self, channels, lstm_hidden_dim=64):
+        super(InlineTrackerBlock, self).__init__()
+        self.flow_conv1 = nn.Conv2d(channels * 2, channels, kernel_size=3, padding=1, bias=True)
+        self.flow_relu = nn.LeakyReLU(0.2, inplace=False)
+        self.flow_conv2 = nn.Conv2d(channels, 2, kernel_size=3, padding=1, bias=True)
+        
+        self.lstm_hidden_dim = lstm_hidden_dim
+        
+        self.feature_encoder = nn.Conv2d(channels * 2 + 2, lstm_hidden_dim, kernel_size=3, padding=1, bias=True)
+        self.feature_encoder_act = nn.LeakyReLU(0.2, inplace=False)
+        
+        self.conv_lstm = ConvLSTMCell(
+            input_dim=lstm_hidden_dim,
+            hidden_dim=lstm_hidden_dim,
+            kernel_size=3,
+            bias=True
+        )
+        
+        self.flow_decoder = nn.Conv2d(lstm_hidden_dim, 2, kernel_size=3, padding=1, bias=True)
+        
+        self.lstm_h = None
+        self.lstm_c = None
+
+    def forward(self, img_feat, event_feat):
+
+        B, C, H, W = img_feat.size()
+        device = img_feat.device
+        
+        concat_feat = torch.cat([img_feat, event_feat], dim=1)
+        
+        flow_features = self.flow_conv1(concat_feat)
+        flow_features = self.flow_relu(flow_features)
+        initial_flow = self.flow_conv2(flow_features)
+        
+        if self.lstm_h is None or self.lstm_c is None or self.lstm_h.size(0) != B:
+            self.lstm_h = torch.zeros(B, self.lstm_hidden_dim, H, W, device=device)
+            self.lstm_c = torch.zeros(B, self.lstm_hidden_dim, H, W, device=device)
+            
+            lstm_input_features = torch.cat([concat_feat, initial_flow], dim=1)
+            lstm_input_features = self.feature_encoder(lstm_input_features)
+            lstm_input_features = self.feature_encoder_act(lstm_input_features)
+            
+            self.lstm_h, self.lstm_c = self.conv_lstm(lstm_input_features, (self.lstm_h, self.lstm_c))
+            
+            flow_refinement = self.flow_decoder(self.lstm_h)
+            
+            flow = initial_flow + flow_refinement
+        else:
+            flow = initial_flow
+        
+        xx = torch.arange(0, W, device=device).view(1, -1).repeat(H, 1).float() / (W-1) * 2 - 1
+        yy = torch.arange(0, H, device=device).view(-1, 1).repeat(1, W).float() / (H-1) * 2 - 1
+        
+        grid = torch.stack([xx, yy], dim=0).unsqueeze(0).repeat(B, 1, 1, 1)
+        grid = grid.permute(0, 2, 3, 1)
+        
+        flow_x = flow[:, 0, :, :] / ((W-1) / 2)
+        flow_y = flow[:, 1, :, :] / ((H-1) / 2)
+        flow_scaled = torch.stack([flow_x, flow_y], dim=-1)
+        
+        grid_flow = grid + flow_scaled
+        warped_feat = F.grid_sample(img_feat, grid_flow, mode='bilinear', padding_mode='border', align_corners=True)
+        
+        output = warped_feat + img_feat
+
+        return output
+
+    def reset_states(self):
+
+        self.lstm_h = None
+        self.lstm_c = None
+
+
+class EFNet_att_track_fusion(nn.Module):
     def __init__(
         self,
         in_chn=3,
@@ -97,23 +179,28 @@ class EFNet_tracking(nn.Module):
         fuse_before_downsample=True,
         relu_slope=0.2,
         num_heads=[1, 2, 4],
+        use_tracking=True,
     ):
-        super(EFNet_tracking, self).__init__()
+        super(EFNet_att_track_fusion, self).__init__()
         self.depth = depth
         self.fuse_before_downsample = fuse_before_downsample
         self.num_heads = num_heads
+        self.use_tracking = use_tracking
         self.down_path_1 = nn.ModuleList()
         self.down_path_2 = nn.ModuleList()
         self.conv_01 = nn.Conv2d(in_chn, wf, 3, 1, 1)
-        # Stage 2 will now use the partially deblurred image from stage 1.
         self.conv_02 = nn.Conv2d(in_chn, wf, 3, 1, 1)
-        # Event branch.
+        # event
         self.down_path_ev = nn.ModuleList()
         self.conv_ev1 = nn.Conv2d(ev_chn, wf, 3, 1, 1)
 
         prev_channels = self.get_input_chn(wf)
         for i in range(depth):
             downsample = True if (i + 1) < depth else False
+
+            # Only enable tracking for the first two layers
+            layer_use_tracking = use_tracking and i in [0, 1] # added here
+            
             self.down_path_1.append(
                 UNetConvBlock(
                     prev_channels,
@@ -121,7 +208,7 @@ class EFNet_tracking(nn.Module):
                     downsample,
                     relu_slope,
                     num_heads=self.num_heads[i],
-                    enable_tracking=True
+                    use_tracking=layer_use_tracking,
                 )
             )
             self.down_path_2.append(
@@ -131,13 +218,15 @@ class EFNet_tracking(nn.Module):
                     downsample,
                     relu_slope,
                     use_emgc=downsample,
-                    enable_tracking=True
+                    use_tracking=False,
                 )
             )
+            # ev encoder
             if i < self.depth:
                 self.down_path_ev.append(
                     UNetEVConvBlock(prev_channels, (2**i) * wf, downsample, relu_slope)
                 )
+
             prev_channels = (2**i) * wf
 
         self.up_path_1 = nn.ModuleList()
@@ -150,74 +239,94 @@ class EFNet_tracking(nn.Module):
             self.skip_conv_1.append(nn.Conv2d((2**i) * wf, (2**i) * wf, 3, 1, 1))
             self.skip_conv_2.append(nn.Conv2d((2**i) * wf, (2**i) * wf, 3, 1, 1))
             prev_channels = (2**i) * wf
-
         self.sam12 = SAM(prev_channels)
+
         self.cat12 = nn.Conv2d(prev_channels * 2, prev_channels, 1, 1, 0)
+
         self.fine_fusion = BidirectionalFrameFusionBlock(channels=wf)
+
+        self.coarse_map = nn.Conv2d(3, wf, kernel_size=1, padding=0)
+        self.coarse_unmap = nn.Conv2d(wf, 3, kernel_size=3, padding=1)
+
         self.last = conv3x3(prev_channels, in_chn, bias=True)
 
     def forward(self, x, event, mask=None):
         image = x
 
-        # ------------------
-        # Process Event Branch
-        # ------------------
+        # EVencoder
         ev = []
         e1 = self.conv_ev1(event)
+        ev_features = []
         for i, down in enumerate(self.down_path_ev):
             if i < self.depth - 1:
                 e1, e1_up = down(e1, self.fuse_before_downsample)
-                ev.append(e1_up if self.fuse_before_downsample else e1)
+                if self.fuse_before_downsample:
+                    ev.append(e1_up)
+                    ev_features.append(e1_up)
+                else:
+                    ev.append(e1)
+                    ev_features.append(e1)
             else:
                 e1 = down(e1, self.fuse_before_downsample)
                 ev.append(e1)
+                ev_features.append(e1)
 
-        # ------------------
-        # Stage 1: Initial Deblurring using inline tracking.
-        # ------------------
+        # stage 1
         x1 = self.conv_01(image)
         encs = []
         decs = []
-        flows_stage1 = []  # store partial flow outputs at each scale
         masks = []
         for i, down in enumerate(self.down_path_1):
             if (i + 1) < self.depth:
-                x1, x1_up, flow = down(x1, event_filter=ev[i], merge_before_downsample=self.fuse_before_downsample)
+
+                x1, x1_up = down(
+                    x1,
+                    event_filter=ev[i],
+                    merge_before_downsample=self.fuse_before_downsample,
+                    event_feat=ev_features[i] if self.use_tracking else None,
+                )
                 encs.append(x1_up)
-                flows_stage1.append(flow)
+
                 if mask is not None:
                     masks.append(F.interpolate(mask, scale_factor=0.5**i))
+
             else:
-                x1, flow = down(x1, event_filter=ev[i], merge_before_downsample=self.fuse_before_downsample)
-                flows_stage1.append(flow)
+                x1 = down(
+                    x1,
+                    event_filter=ev[i],
+                    merge_before_downsample=self.fuse_before_downsample,
+                    event_feat=ev_features[i] if self.use_tracking else None,
+                )
 
         for i, up in enumerate(self.up_path_1):
             x1 = up(x1, self.skip_conv_1[i](encs[-i - 1]))
             decs.append(x1)
-        sam_feature, out_1 = self.sam12(x1, image)  # SAM produces intermediate deblurred output
+        sam_feature, out_1 = self.sam12(x1, image)
 
-        x2 = self.conv_02(out_1)
+        # stage 2
+        x2 = self.conv_02(image)
         x2 = self.cat12(torch.cat([x2, sam_feature], dim=1))
         blocks = []
-        flows_stage2 = []
         for i, down in enumerate(self.down_path_2):
             if (i + 1) < self.depth:
                 if mask is not None:
-                    x2, x2_up, flow = down(x2, encs[i], decs[-i - 1], mask=masks[i])
+                    x2, x2_up = down(x2, encs[i], decs[-i - 1], mask=masks[i], event_feat=ev_features[i] if self.use_tracking else None)
                 else:
-                    x2, x2_up, flow = down(x2, encs[i], decs[-i - 1])
+                    x2, x2_up = down(x2, encs[i], decs[-i - 1], event_feat=ev_features[i] if self.use_tracking else None)
                 blocks.append(x2_up)
-                flows_stage2.append(flow)
             else:
-                x2, flow = down(x2)
-                flows_stage2.append(flow)
+                x2 = down(x2, event_feat=ev_features[i] if self.use_tracking else None)
 
         for i, up in enumerate(self.up_path_2):
             x2 = up(x2, self.skip_conv_2[i](blocks[-i - 1]))
 
         out_2 = self.last(x2)
         out_2 = out_2 + image
-        out_3 = self.fine_fusion(x2, out_2)
+
+        out_2_map = self.coarse_map(out_2)
+
+        fused_coarse, fused_feat = self.fine_fusion(out_2_map, x2)
+        out_3 = self.last(fused_feat)
         out_3 = out_3 + image
 
         return [out_1, out_3]
@@ -230,31 +339,35 @@ class EFNet_tracking(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.orthogonal_(m.weight, gain=gain)
-                if m.bias is not None:
+                if not m.bias is None:
                     nn.init.constant_(m.bias, 0)
 
+    def reset_lstm_states(self):
+        for i in range(min(2, self.depth)):  # Only reset first two layers where tracking is used
+            if hasattr(self.down_path_1[i], 'feature_tracker') and self.down_path_1[i].use_tracking:
+                self.down_path_1[i].feature_tracker.reset_states()
+            
+            if hasattr(self.down_path_2[i], 'feature_tracker') and self.down_path_2[i].use_tracking:
+                self.down_path_2[i].feature_tracker.reset_states()
+
+
 class UNetConvBlock(nn.Module):
-    def __init__(self, in_size, out_size, downsample, relu_slope, use_emgc=False, num_heads=None, enable_tracking=True):
+    def __init__(
+        self, in_size, out_size, downsample, relu_slope, use_emgc=False, num_heads=None, 
+        use_tracking=False
+    ):  # cat
         super(UNetConvBlock, self).__init__()
-        self.downsample_flag = downsample
-        self.enable_tracking = enable_tracking
+        self.downsample = downsample
         self.identity = nn.Conv2d(in_size, out_size, 1, 1, 0)
         self.use_emgc = use_emgc
         self.num_heads = num_heads
+        self.use_tracking = use_tracking
 
         self.conv_1 = nn.Conv2d(in_size, out_size, kernel_size=3, padding=1, bias=True)
         self.relu_1 = nn.LeakyReLU(relu_slope, inplace=False)
         self.conv_2 = nn.Conv2d(out_size, out_size, kernel_size=3, padding=1, bias=True)
         self.relu_2 = nn.LeakyReLU(relu_slope, inplace=False)
 
-        # ----- Inline feature tracking: add a ConvLSTM cell and a flow head -----
-        if self.enable_tracking:
-            self.conv_lstm = ConvLSTMCell(out_size, out_size, kernel_size=3, bias=True)
-            # flow_head outputs a 2-channel field (dx, dy)
-            self.flow_head = nn.Conv2d(out_size, 2, kernel_size=3, padding=1, bias=True)
-            self.hidden_state = None  # will hold (h, c)
-
-        # ----- Existing optional modules (e.g., for EMGC fusion) -----
         if downsample and use_emgc:
             self.emgc_enc = nn.Conv2d(out_size, out_size, 3, 1, 1)
             self.emgc_dec = nn.Conv2d(out_size, out_size, 3, 1, 1)
@@ -263,8 +376,13 @@ class UNetConvBlock(nn.Module):
 
         if downsample:
             self.downsample = conv_down(out_size, out_size, bias=False)
-        else:
-            self.downsample = None
+            
+        # Initialize feature tracker if needed
+        if self.use_tracking:
+            self.feature_tracker = InlineTrackerBlock(
+                out_size, 
+                lstm_hidden_dim=out_size,
+            )
 
         if self.num_heads is not None:
             self.image_event_transformer = EventImage_ChannelAttentionTransformerBlock(
@@ -275,53 +393,45 @@ class UNetConvBlock(nn.Module):
                 LayerNorm_type="WithBias",
             )
 
-    def reset_hidden(self, batch_size, spatial_size, device):
-        if self.enable_tracking:
-            h = torch.zeros(batch_size, self.conv_lstm.hidden_dim, spatial_size[0], spatial_size[1]).to(device)
-            c = torch.zeros(batch_size, self.conv_lstm.hidden_dim, spatial_size[0], spatial_size[1]).to(device)
-            self.hidden_state = (h, c)
-
-    def forward(self, x, enc=None, dec=None, mask=None, event_filter=None, merge_before_downsample=True):
-        # Standard two-layer convolution with residual connection.
+    def forward(
+        self,
+        x,
+        enc=None,
+        dec=None,
+        mask=None,
+        event_filter=None,
+        merge_before_downsample=True,
+        event_feat=None,  # Added parameter for event features
+    ):
         out = self.conv_1(x)
-        out_conv1 = self.relu_1(out)
-        out_conv2 = self.relu_2(self.conv_2(out_conv1))
-        out = out_conv2 + self.identity(x)
 
-        # ----- Inline Tracking: update recurrent state and compute flow -----
-        flow = None
-        if self.enable_tracking:
-            if self.hidden_state is None:
-                batch_size, _, H, W = out.shape
-                device = out.device
-                self.reset_hidden(batch_size, (H, W), device)
-            h, c = self.conv_lstm(out, self.hidden_state)
-            self.hidden_state = (h, c)
-            flow = self.flow_head(h)  # computed 2-channel displacement
-            # Option: warp the features using flow (e.g., with bilinear interpolation)
-            # For now, we simply output flow as additional information.
+        out = self.relu_1(out)
+        out = self.conv_2(out)
+        out = self.relu_2(out)
+        out = out + self.identity(x)
 
-        # ----- Additional processing (EMGC and transformer fusion) -----
-        if enc is not None and dec is not None and mask is not None:
-            assert self.use_emgc
-            out_enc = self.emgc_enc(enc) + self.emgc_enc_mask((1 - mask) * enc)
-            out_dec = self.emgc_dec(dec) + self.emgc_dec_mask(mask * dec)
-            out = out + out_enc + out_dec
+        if enc is not None and dec is not None and self.use_emgc:
+            if mask is not None:
+                out_enc = self.emgc_enc(enc) + self.emgc_enc_mask((1 - mask) * enc)
+                out_dec = self.emgc_dec(dec) + self.emgc_dec_mask(mask * dec)
+                out = out + out_enc + out_dec
 
-        if event_filter is not None and merge_before_downsample:
-            out = self.image_event_transformer(out, event_filter)
-
-        if self.downsample is not None:
-            out_down = self.downsample(out)
-            if not merge_before_downsample:
-                out_down = self.image_event_transformer(out_down, event_filter)
-            return out_down, out, flow  # return downsampled features, skip features, and computed flow
-        else:
+        if self.num_heads is not None and event_filter is not None:
             if merge_before_downsample:
-                return out, flow
-            else:
                 out = self.image_event_transformer(out, event_filter)
-                return out, flow
+
+        if self.use_tracking and event_feat is not None: # added here
+            out = self.feature_tracker(out, event_feat)
+
+        if self.downsample:
+            out_down = self.downsample(out)
+            if not merge_before_downsample and self.num_heads is not None and event_filter is not None:
+                out_down = self.image_event_transformer(out_down, event_filter)
+            return out_down, out
+        else:
+            if not merge_before_downsample and self.num_heads is not None and event_filter is not None:
+                out = self.image_event_transformer(out, event_filter)
+            return out
 
 
 class UNetEVConvBlock(nn.Module):
@@ -381,10 +491,6 @@ class UNetUpBlock(nn.Module):
         self.conv_block = UNetConvBlock(in_size, out_size, False, relu_slope)
 
     def forward(self, x, bridge):
-        # Handle the case where x is a tuple (features, flow)
-        if isinstance(x, tuple):
-            x = x[0]  # Extract just the features, ignore the flow
-            
         up = self.up(x)
         out = torch.cat([up, bridge], 1)
         out = self.conv_block(out)
@@ -448,8 +554,8 @@ if __name__ == "__main__":
     B, C, H, W = 1, 3, 256, 256
     image = torch.randn(B, C, H, W)
     event = torch.randn(B, 6, H, W)
-    model = EFNet_tracking()
+    model = EFNet_att_track_fusion()
     outs = model(image, event)
     for i, o in enumerate(outs, start=1):
-        print(f"Output {i} shape: {o.shape}")  # [B,3,H,W] for out_1/out_2/out_3
+        print(f"Output {i} shape: {o.shape}")
     print("Test forward pass done!")

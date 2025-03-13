@@ -190,6 +190,7 @@ class EFNet_tracking(nn.Module):
                     scale_level=i,
                 )
             )
+            # Always disable tracking for stage 2
             self.down_path_2.append(
                 UNetConvBlock(
                     prev_channels,
@@ -197,7 +198,7 @@ class EFNet_tracking(nn.Module):
                     downsample,
                     relu_slope,
                     use_emgc=downsample,
-                    enable_tracking=self.enable_tracking,
+                    enable_tracking=False,  # Always disable tracking for stage 2
                     scale_level=i,
                 )
             )
@@ -238,15 +239,11 @@ class EFNet_tracking(nn.Module):
                 if hasattr(block, 'hidden_state'):
                     block.hidden_state = None
                     block.prev_features = None
-            for block in self.down_path_2:
-                if hasattr(block, 'hidden_state'):
-                    block.hidden_state = None
-                    block.prev_features = None
+            # Remove reset for down_path_2 since tracking is disabled for stage 2
 
     def forward(self, x, event, mask=None):
         image = x
         flows_stage1 = []
-        flows_stage2 = []
 
         # EVencoder
         ev = []
@@ -314,24 +311,12 @@ class EFNet_tracking(nn.Module):
         for i, down in enumerate(self.down_path_2):
             if (i + 1) < self.depth:
                 if mask is not None:
-                    if self.enable_tracking:
-                        x2, x2_up, flow = down(x2, encs[i], decs[-i - 1], mask=masks[i])
-                        flows_stage2.append(flow)
-                    else:
-                        x2, x2_up = down(x2, encs[i], decs[-i - 1], mask=masks[i])
+                    x2, x2_up = down(x2, encs[i], decs[-i - 1], mask=masks[i])
                 else:
-                    if self.enable_tracking:
-                        x2, x2_up, flow = down(x2, encs[i], decs[-i - 1])
-                        flows_stage2.append(flow)
-                    else:
-                        x2, x2_up = down(x2, encs[i], decs[-i - 1])
+                    x2, x2_up = down(x2, encs[i], decs[-i - 1])
                 blocks.append(x2_up)
             else:
-                if self.enable_tracking:
-                    x2, flow = down(x2)
-                    flows_stage2.append(flow)
-                else:
-                    x2 = down(x2)
+                x2 = down(x2)
 
         for i, up in enumerate(self.up_path_2):
             x2 = up(x2, self.skip_conv_2[i](blocks[-i - 1]))

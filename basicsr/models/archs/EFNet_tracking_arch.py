@@ -381,6 +381,10 @@ class UNetUpBlock(nn.Module):
         self.conv_block = UNetConvBlock(in_size, out_size, False, relu_slope)
 
     def forward(self, x, bridge):
+        # Handle the case where x is a tuple (features, flow)
+        if isinstance(x, tuple):
+            x = x[0]  # Extract just the features, ignore the flow
+            
         up = self.up(x)
         out = torch.cat([up, bridge], 1)
         out = self.conv_block(out)

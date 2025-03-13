@@ -85,7 +85,7 @@ class SAM(nn.Module):
         return x1, img
 
 
-class EFNet_modified(nn.Module):
+class EFNet_tracking(nn.Module):
     def __init__(
         self,
         in_chn=3,
@@ -97,7 +97,7 @@ class EFNet_modified(nn.Module):
         num_heads=[1, 2, 4],
         enable_tracking=True,
     ):
-        super(EFNet_modified, self).__init__()
+        super(EFNet_tracking, self).__init__()
         self.depth = depth
         self.fuse_before_downsample = fuse_before_downsample
         self.num_heads = num_heads
@@ -553,7 +553,7 @@ if __name__ == "__main__":
     B, C, H, W = 1, 3, 256, 256
     image = torch.randn(B, C, H, W)
     event = torch.randn(B, 6, H, W)
-    model = EFNet_modified(enable_tracking=True)
+    model = EFNet_tracking(enable_tracking=True)
     
     # Test with tracking enabled
     outputs = model(image, event)
@@ -573,7 +573,7 @@ if __name__ == "__main__":
             print(f"Output {i} shape: {o.shape}")
     
     # Test with tracking disabled
-    model_no_tracking = EFNet_modified(enable_tracking=False)
+    model_no_tracking = EFNet_tracking(enable_tracking=False)
     outs_no_tracking = model_no_tracking(image, event)
     print("\nRunning with tracking disabled:")
     for i, o in enumerate(outs_no_tracking, start=1):

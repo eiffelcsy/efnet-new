@@ -61,7 +61,7 @@ class EfficientCorrelation(nn.Module):
         corr_tensor = []
         
         # Process in chunks to reduce memory
-        chunk_size = 16  # Process 16 channels at a time
+        chunk_size = 4  # Process 16 channels at a time
         for i in range(0, C, chunk_size):
             end = min(i + chunk_size, C)
             x1_chunk = x1[:, i:end]

@@ -153,7 +153,7 @@ class EFNet_tracking(nn.Module):
 
         self.sam12 = SAM(prev_channels)
         self.cat12 = nn.Conv2d(prev_channels * 2, prev_channels, 1, 1, 0)
-        self.fine_fusion = CoarseToFineFusionModule(feat_channels=wf)
+        self.fine_fusion = BidirectionalFrameFusionBlock(channels=wf)
         self.last = conv3x3(prev_channels, in_chn, bias=True)
 
     def forward(self, x, event, mask=None):

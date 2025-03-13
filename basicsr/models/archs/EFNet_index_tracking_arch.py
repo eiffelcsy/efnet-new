@@ -1,23 +1,3 @@
-"""
-EFNet_modified
-@inproceedings{sun2022event,
-      author = {Sun, Lei and Sakaridis, Christos and Liang, Jingyun and Jiang, Qi and Yang, Kailun and Sun, Peng and Ye, Yaozu and Wang, Kaiwei and Van Gool, Luc},
-      title = {Event-Based Fusion for Motion Deblurring with Cross-modal Attention},
-      booktitle = {European Conference on Computer Vision (ECCV)},
-      year = 2022
-      }
-"""
-
-import torch
-import torch.nn as nn
-import math
-from basicsr.models.archs.arch_util import (
-    EventImage_ChannelAttentionTransformerBlock,
-    ChannelAttentionBlock,
-)
-from torch.nn import functional as F
-
-
 # ---------------------------
 # ConvLSTM Cell for temporal feature tracking
 # ---------------------------
@@ -139,253 +119,7 @@ class EfficientFlowEstimator(nn.Module):
         return flow
 
 
-def conv3x3(in_chn, out_chn, bias=True):
-    layer = nn.Conv2d(in_chn, out_chn, kernel_size=3, stride=1, padding=1, bias=bias)
-    return layer
-
-
-def conv_down(in_chn, out_chn, bias=False):
-    layer = nn.Conv2d(in_chn, out_chn, kernel_size=4, stride=2, padding=1, bias=bias)
-    return layer
-
-
-def conv(in_channels, out_channels, kernel_size, bias=False, stride=1):
-    return nn.Conv2d(
-        in_channels,
-        out_channels,
-        kernel_size,
-        padding=(kernel_size // 2),
-        bias=bias,
-        stride=stride,
-    )
-
-
-## Supervised Attention Module
-## https://github.com/swz30/MPRNet
-class SAM(nn.Module):
-    def __init__(self, n_feat, kernel_size=3, bias=True):
-        super(SAM, self).__init__()
-        self.conv1 = conv(n_feat, n_feat, kernel_size, bias=bias)
-        self.conv2 = conv(n_feat, 3, kernel_size, bias=bias)
-        self.conv3 = conv(3, n_feat, kernel_size, bias=bias)
-
-    def forward(self, x, x_img):
-        x1 = self.conv1(x)
-        img = self.conv2(x) + x_img
-        x2 = torch.sigmoid(self.conv3(img))
-        x1 = x1 * x2
-        x1 = x1 + x
-        return x1, img
-
-
-class EFNet_tracking(nn.Module):
-    def __init__(
-        self,
-        in_chn=3,
-        ev_chn=6,
-        wf=64,
-        depth=3,
-        fuse_before_downsample=True,
-        relu_slope=0.2,
-        num_heads=[1, 2, 4],
-        enable_tracking=True,
-    ):
-        super(EFNet_tracking, self).__init__()
-        self.depth = depth
-        self.fuse_before_downsample = fuse_before_downsample
-        self.num_heads = num_heads
-        self.enable_tracking = enable_tracking
-        self.down_path_1 = nn.ModuleList()
-        self.down_path_2 = nn.ModuleList()
-        self.conv_01 = nn.Conv2d(in_chn, wf, 3, 1, 1)
-        self.conv_02 = nn.Conv2d(in_chn, wf, 3, 1, 1)
-        # event
-        self.down_path_ev = nn.ModuleList()
-        self.conv_ev1 = nn.Conv2d(ev_chn, wf, 3, 1, 1)
-
-        prev_channels = self.get_input_chn(wf)
-        for i in range(depth):
-            downsample = True if (i + 1) < depth else False
-
-            self.down_path_1.append(
-                UNetConvBlock(
-                    prev_channels,
-                    (2**i) * wf,
-                    downsample,
-                    relu_slope,
-                    num_heads=self.num_heads[i] if i < len(self.num_heads) else None,
-                    enable_tracking=self.enable_tracking,
-                    scale_level=i,
-                )
-            )
-            self.down_path_2.append(
-                UNetConvBlock(
-                    prev_channels,
-                    (2**i) * wf,
-                    downsample,
-                    relu_slope,
-                    use_emgc=downsample,
-                    enable_tracking=self.enable_tracking,
-                    scale_level=i,
-                )
-            )
-            # ev encoder
-            if i < self.depth:
-                self.down_path_ev.append(
-                    UNetEVConvBlock(prev_channels, (2**i) * wf, downsample, relu_slope)
-                )
-
-            prev_channels = (2**i) * wf
-
-        self.up_path_1 = nn.ModuleList()
-        self.up_path_2 = nn.ModuleList()
-        self.skip_conv_1 = nn.ModuleList()
-        self.skip_conv_2 = nn.ModuleList()
-        for i in reversed(range(depth - 1)):
-            self.up_path_1.append(UNetUpBlock(prev_channels, (2**i) * wf, relu_slope))
-            self.up_path_2.append(UNetUpBlock(prev_channels, (2**i) * wf, relu_slope))
-            self.skip_conv_1.append(nn.Conv2d((2**i) * wf, (2**i) * wf, 3, 1, 1))
-            self.skip_conv_2.append(nn.Conv2d((2**i) * wf, (2**i) * wf, 3, 1, 1))
-            prev_channels = (2**i) * wf
-        self.sam12 = SAM(prev_channels)
-
-        self.cat12 = nn.Conv2d(prev_channels * 2, prev_channels, 1, 1, 0)
-
-        # Replace BidirectionalFrameFusionBlock with CoarseToFineFusionModule
-        self.fine_fusion = CoarseToFineFusionModule(feat_channels=wf)
-
-        self.coarse_map = nn.Conv2d(3, wf, kernel_size=1, padding=0)
-        self.coarse_unmap = nn.Conv2d(wf, 3, kernel_size=3, padding=1)
-
-        self.last = conv3x3(prev_channels, in_chn, bias=True)
-
-    def reset_tracking_states(self):
-        """Reset all ConvLSTM states in the network"""
-        if self.enable_tracking:
-            for block in self.down_path_1:
-                if hasattr(block, 'hidden_state'):
-                    block.hidden_state = None
-                    block.prev_features = None
-            for block in self.down_path_2:
-                if hasattr(block, 'hidden_state'):
-                    block.hidden_state = None
-                    block.prev_features = None
-
-    def forward(self, x, event, mask=None):
-        image = x
-        flows_stage1 = []
-        flows_stage2 = []
-
-        # EVencoder
-        ev = []
-        e1 = self.conv_ev1(event)
-        for i, down in enumerate(self.down_path_ev):
-            if i < self.depth - 1:
-                e1, e1_up = down(e1, self.fuse_before_downsample)
-                if self.fuse_before_downsample:
-                    ev.append(e1_up)
-                else:
-                    ev.append(e1)
-            else:
-                e1 = down(e1, self.fuse_before_downsample)
-                ev.append(e1)
-
-        # stage 1
-        x1 = self.conv_01(image)
-        encs = []
-        decs = []
-        masks = []
-        for i, down in enumerate(self.down_path_1):
-            if (i + 1) < self.depth:
-                if self.enable_tracking:
-                    x1, x1_up, flow = down(
-                        x1,
-                        event_filter=ev[i],
-                        merge_before_downsample=self.fuse_before_downsample,
-                    )
-                    flows_stage1.append(flow)
-                else:
-                    x1, x1_up = down(
-                        x1,
-                        event_filter=ev[i],
-                        merge_before_downsample=self.fuse_before_downsample,
-                    )
-                encs.append(x1_up)
-
-                if mask is not None:
-                    masks.append(F.interpolate(mask, scale_factor=0.5**i))
-
-            else:
-                if self.enable_tracking:
-                    x1, flow = down(
-                        x1,
-                        event_filter=ev[i],
-                        merge_before_downsample=self.fuse_before_downsample,
-                    )
-                    flows_stage1.append(flow)
-                else:
-                    x1 = down(
-                        x1,
-                        event_filter=ev[i],
-                        merge_before_downsample=self.fuse_before_downsample,
-                    )
-
-        for i, up in enumerate(self.up_path_1):
-            x1 = up(x1, self.skip_conv_1[i](encs[-i - 1]))
-            decs.append(x1)
-        sam_feature, out_1 = self.sam12(x1, image)
-
-        # stage 2 - Use out_1 (partially deblurred) as input instead of original image
-        x2 = self.conv_02(out_1)  # Changed from image to out_1
-        x2 = self.cat12(torch.cat([x2, sam_feature], dim=1))
-        blocks = []
-        for i, down in enumerate(self.down_path_2):
-            if (i + 1) < self.depth:
-                if mask is not None:
-                    if self.enable_tracking:
-                        x2, x2_up, flow = down(x2, encs[i], decs[-i - 1], mask=masks[i])
-                        flows_stage2.append(flow)
-                    else:
-                        x2, x2_up = down(x2, encs[i], decs[-i - 1], mask=masks[i])
-                else:
-                    if self.enable_tracking:
-                        x2, x2_up, flow = down(x2, encs[i], decs[-i - 1])
-                        flows_stage2.append(flow)
-                    else:
-                        x2, x2_up = down(x2, encs[i], decs[-i - 1])
-                blocks.append(x2_up)
-            else:
-                if self.enable_tracking:
-                    x2, flow = down(x2)
-                    flows_stage2.append(flow)
-                else:
-                    x2 = down(x2)
-
-        for i, up in enumerate(self.up_path_2):
-            x2 = up(x2, self.skip_conv_2[i](blocks[-i - 1]))
-
-        out_2 = self.last(x2)
-        out_2 = out_2 + image
-
-        # Use the CoarseToFineFusionModule for final refinement
-        refined_features = self.fine_fusion(x2, out_2)
-        out_3 = self.last(refined_features)
-        out_3 = out_3 + image
-
-        # Always return just the outputs, not the flows
-        return [out_1, out_3]
-
-    def get_input_chn(self, in_chn):
-        return in_chn
-
-    def _initialize(self):
-        gain = nn.init.calculate_gain("leaky_relu", 0.20)
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.orthogonal_(m.weight, gain=gain)
-                if not m.bias is None:
-                    nn.init.constant_(m.bias, 0)
-
+def conv3x3(in_chn, out_chn, bias=True): 
 
 class UNetConvBlock(nn.Module):
     def __init__(
@@ -512,156 +246,215 @@ class UNetConvBlock(nn.Module):
                 if self.enable_tracking:
                     return out, flow
                 else:
-                    return out
+                    return out 
 
+class EFNet_tracking(nn.Module):
+    def __init__(
+        self,
+        in_chn=3,
+        ev_chn=6,
+        wf=64,
+        depth=3,
+        fuse_before_downsample=True,
+        relu_slope=0.2,
+        num_heads=[1, 2, 4],
+        enable_tracking=True,
+    ):
+        super(EFNet_tracking, self).__init__()
+        self.depth = depth
+        self.fuse_before_downsample = fuse_before_downsample
+        self.num_heads = num_heads
+        self.enable_tracking = enable_tracking
+        self.down_path_1 = nn.ModuleList()
+        self.down_path_2 = nn.ModuleList()
+        self.conv_01 = nn.Conv2d(in_chn, wf, 3, 1, 1)
+        self.conv_02 = nn.Conv2d(in_chn, wf, 3, 1, 1)
+        # event
+        self.down_path_ev = nn.ModuleList()
+        self.conv_ev1 = nn.Conv2d(ev_chn, wf, 3, 1, 1)
 
-class UNetEVConvBlock(nn.Module):
-    def __init__(self, in_size, out_size, downsample, relu_slope, use_emgc=False):
-        super(UNetEVConvBlock, self).__init__()
-        self.downsample = downsample
-        self.identity = nn.Conv2d(in_size, out_size, 1, 1, 0)
-        self.use_emgc = use_emgc
+        prev_channels = self.get_input_chn(wf)
+        for i in range(depth):
+            downsample = True if (i + 1) < depth else False
 
-        self.conv_1 = nn.Conv2d(in_size, out_size, kernel_size=3, padding=1, bias=True)
-        self.relu_1 = nn.LeakyReLU(relu_slope, inplace=False)
-        self.conv_2 = nn.Conv2d(out_size, out_size, kernel_size=3, padding=1, bias=True)
-        self.relu_2 = nn.LeakyReLU(relu_slope, inplace=False)
+            # Use scale-aware UNetConvBlock with appropriate scale_level
+            self.down_path_1.append(
+                UNetConvBlock(
+                    prev_channels,
+                    (2**i) * wf,
+                    downsample,
+                    relu_slope,
+                    num_heads=self.num_heads[i] if i < len(self.num_heads) else None,
+                    enable_tracking=self.enable_tracking,
+                    scale_level=i,  # Pass scale level to adjust search range
+                )
+            )
+            self.down_path_2.append(
+                UNetConvBlock(
+                    prev_channels,
+                    (2**i) * wf,
+                    downsample,
+                    relu_slope,
+                    use_emgc=downsample,
+                    enable_tracking=self.enable_tracking,
+                    scale_level=i,  # Pass scale level to adjust search range
+                )
+            )
+            # ev encoder
+            if i < self.depth:
+                self.down_path_ev.append(
+                    UNetEVConvBlock(prev_channels, (2**i) * wf, downsample, relu_slope)
+                )
 
-        self.conv_before_merge = nn.Conv2d(out_size, out_size, 1, 1, 0)
-        if downsample and use_emgc:
-            self.emgc_enc = nn.Conv2d(out_size, out_size, 3, 1, 1)
-            self.emgc_dec = nn.Conv2d(out_size, out_size, 3, 1, 1)
-            self.emgc_enc_mask = nn.Conv2d(out_size, out_size, 3, 1, 1)
-            self.emgc_dec_mask = nn.Conv2d(out_size, out_size, 3, 1, 1)
+            prev_channels = (2**i) * wf
 
-        if downsample:
-            self.downsample = conv_down(out_size, out_size, bias=False)
+        self.up_path_1 = nn.ModuleList()
+        self.up_path_2 = nn.ModuleList()
+        self.skip_conv_1 = nn.ModuleList()
+        self.skip_conv_2 = nn.ModuleList()
+        for i in reversed(range(depth - 1)):
+            self.up_path_1.append(UNetUpBlock(prev_channels, (2**i) * wf, relu_slope))
+            self.up_path_2.append(UNetUpBlock(prev_channels, (2**i) * wf, relu_slope))
+            self.skip_conv_1.append(nn.Conv2d((2**i) * wf, (2**i) * wf, 3, 1, 1))
+            self.skip_conv_2.append(nn.Conv2d((2**i) * wf, (2**i) * wf, 3, 1, 1))
+            prev_channels = (2**i) * wf
+        self.sam12 = SAM(prev_channels)
 
-    def forward(self, x, merge_before_downsample=True):
-        out = self.conv_1(x)
+        self.cat12 = nn.Conv2d(prev_channels * 2, prev_channels, 1, 1, 0)
 
-        out_conv1 = self.relu_1(out)
-        out_conv2 = self.relu_2(self.conv_2(out_conv1))
+        # Replace BidirectionalFrameFusionBlock with CoarseToFineFusionModule
+        self.fine_fusion = CoarseToFineFusionModule(feat_channels=wf)
 
-        out = out_conv2 + self.identity(x)
+        self.coarse_map = nn.Conv2d(3, wf, kernel_size=1, padding=0)
+        self.coarse_unmap = nn.Conv2d(wf, 3, kernel_size=3, padding=1)
 
-        if self.downsample:
+        self.last = conv3x3(prev_channels, in_chn, bias=True)
 
-            out_down = self.downsample(out)
+    def reset_tracking_states(self):
+        """Reset all ConvLSTM states in the network"""
+        if self.enable_tracking:
+            for block in self.down_path_1:
+                if hasattr(block, 'hidden_state'):
+                    block.hidden_state = None
+                    block.prev_features = None
+            for block in self.down_path_2:
+                if hasattr(block, 'hidden_state'):
+                    block.hidden_state = None
+                    block.prev_features = None
+                    
+    def forward(self, x, event, mask=None):
+        image = x
+        flows_stage1 = []
+        flows_stage2 = []
 
-            if not merge_before_downsample:
-
-                out_down = self.conv_before_merge(out_down)
+        # EVencoder
+        ev = []
+        e1 = self.conv_ev1(event)
+        for i, down in enumerate(self.down_path_ev):
+            if i < self.depth - 1:
+                e1, e1_up = down(e1, self.fuse_before_downsample)
+                if self.fuse_before_downsample:
+                    ev.append(e1_up)
+                else:
+                    ev.append(e1)
             else:
-                out = self.conv_before_merge(out)
-            return out_down, out
+                e1 = down(e1, self.fuse_before_downsample)
+                ev.append(e1)
 
-        else:
+        # stage 1
+        x1 = self.conv_01(image)
+        encs = []
+        decs = []
+        masks = []
+        for i, down in enumerate(self.down_path_1):
+            if (i + 1) < self.depth:
+                if self.enable_tracking:
+                    x1, x1_up, flow = down(
+                        x1,
+                        event_filter=ev[i],
+                        merge_before_downsample=self.fuse_before_downsample,
+                    )
+                    flows_stage1.append(flow)
+                else:
+                    x1, x1_up = down(
+                        x1,
+                        event_filter=ev[i],
+                        merge_before_downsample=self.fuse_before_downsample,
+                    )
+                encs.append(x1_up)
 
-            out = self.conv_before_merge(out)
-            return out
+                if mask is not None:
+                    masks.append(F.interpolate(mask, scale_factor=0.5**i))
 
+            else:
+                if self.enable_tracking:
+                    x1, flow = down(
+                        x1,
+                        event_filter=ev[i],
+                        merge_before_downsample=self.fuse_before_downsample,
+                    )
+                    flows_stage1.append(flow)
+                else:
+                    x1 = down(
+                        x1,
+                        event_filter=ev[i],
+                        merge_before_downsample=self.fuse_before_downsample,
+                    )
 
-class UNetUpBlock(nn.Module):
+        for i, up in enumerate(self.up_path_1):
+            x1 = up(x1, self.skip_conv_1[i](encs[-i - 1]))
+            decs.append(x1)
+        sam_feature, out_1 = self.sam12(x1, image)
 
-    def __init__(self, in_size, out_size, relu_slope):
-        super(UNetUpBlock, self).__init__()
-        self.up = nn.ConvTranspose2d(
-            in_size, out_size, kernel_size=2, stride=2, bias=True
-        )
-        self.conv_block = UNetConvBlock(in_size, out_size, False, relu_slope)
+        # stage 2 - Use out_1 (partially deblurred) as input instead of original image
+        x2 = self.conv_02(out_1)  # Changed from image to out_1
+        x2 = self.cat12(torch.cat([x2, sam_feature], dim=1))
+        blocks = []
+        for i, down in enumerate(self.down_path_2):
+            if (i + 1) < self.depth:
+                if mask is not None:
+                    if self.enable_tracking:
+                        x2, x2_up, flow = down(x2, encs[i], decs[-i - 1], mask=masks[i])
+                        flows_stage2.append(flow)
+                    else:
+                        x2, x2_up = down(x2, encs[i], decs[-i - 1], mask=masks[i])
+                else:
+                    if self.enable_tracking:
+                        x2, x2_up, flow = down(x2, encs[i], decs[-i - 1])
+                        flows_stage2.append(flow)
+                    else:
+                        x2, x2_up = down(x2, encs[i], decs[-i - 1])
+                blocks.append(x2_up)
+            else:
+                if self.enable_tracking:
+                    x2, flow = down(x2)
+                    flows_stage2.append(flow)
+                else:
+                    x2 = down(x2)
 
-    def forward(self, x, bridge):
-        up = self.up(x)
-        out = torch.cat([up, bridge], 1)
-        out = self.conv_block(out)
-        return out
+        for i, up in enumerate(self.up_path_2):
+            x2 = up(x2, self.skip_conv_2[i](blocks[-i - 1]))
 
+        out_2 = self.last(x2)
+        out_2 = out_2 + image
 
-class SimpleGate(nn.Module):
-    def forward(self, x):
-        c = x.shape[1] // 2
-        x1 = x[:, :c, :, :]
-        x2 = x[:, c:, :, :]
-        return x1 * x2
+        # Use the CoarseToFineFusionModule for final refinement
+        refined_features = self.fine_fusion(x2, out_2)
+        out_3 = self.last(refined_features)
+        out_3 = out_3 + image
 
-
-class FusionSubBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(FusionSubBlock, self).__init__()
-
-        self.conv1 = nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1)
-        self.sg = SimpleGate()  # optional
-        self.conv2 = nn.Conv2d(in_channels // 2, out_channels, kernel_size=3, padding=1)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.sg(x)
-        x = self.conv2(x)
-        return x
-
-
-class BidirectionalFrameFusionBlock(nn.Module):
-    def __init__(self, channels):
-        super(BidirectionalFrameFusionBlock, self).__init__()
-
-        half = channels // 2
-
-        self.forward_block = FusionSubBlock(
-            in_channels=half + channels, out_channels=channels
-        )
-
-        self.backward_block = FusionSubBlock(
-            in_channels=half + channels, out_channels=channels
-        )
-
-    def forward(self, f_i, f_ip1):
-        B, C, H, W = f_i.shape
-        half = C // 2
-
-        fa_i = f_i[:, :half, :, :]
-        fb_i = f_i[:, half:, :, :]
-
-        forward_in = torch.cat([fa_i, f_ip1], dim=1)
-        f_ip1_new = self.forward_block(forward_in)
-        backward_in = torch.cat([f_ip1_new, fb_i], dim=1)
-        f_i_new = self.backward_block(backward_in)
-
-        return f_i_new, f_ip1_new
-
-
-class CoarseToFineFusionModule(nn.Module):
-    """
-    A module that fuses coarse deblurred features with fine-grained features
-    to produce the final output.
-    """
-    def __init__(self, feat_channels):
-        super(CoarseToFineFusionModule, self).__init__()
+        return [out_1, out_3]
         
-        # Feature refinement layers
-        self.coarse_map = nn.Conv2d(3, feat_channels, kernel_size=1, padding=0)
-        self.fusion_conv1 = nn.Conv2d(feat_channels*2, feat_channels, kernel_size=3, padding=1)
-        self.fusion_conv2 = nn.Conv2d(feat_channels, feat_channels, kernel_size=3, padding=1)
-        self.lrelu = nn.LeakyReLU(0.2, inplace=True)
-        
-    def forward(self, fine_features, coarse_output):
-        """
-        Args:
-            fine_features: High-resolution features from the decoder
-            coarse_output: Coarse deblurred image
-        Returns:
-            Refined features for final output
-        """
-        # Map coarse output to feature space
-        coarse_features = self.coarse_map(coarse_output)
-        
-        # Concatenate and fuse features
-        concat_features = torch.cat([fine_features, coarse_features], dim=1)
-        fused_features = self.lrelu(self.fusion_conv1(concat_features))
-        refined_features = self.lrelu(self.fusion_conv2(fused_features))
-        
-        return refined_features
+    def get_input_chn(self, in_chn):
+        return in_chn
 
+    def _initialize(self):
+        gain = nn.init.calculate_gain("leaky_relu", 0.20)
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.orthogonal_(m.weight, gain=gain)
+                if not m.bias is None:
+                    nn.init.constant_(m.bias, 0) 
 
 if __name__ == "__main__":
     # Quick test
@@ -703,29 +496,4 @@ if __name__ == "__main__":
         else:
             print("CUDA not available, skipping memory test")
     
-    # Compare memory usage with different search ranges
-    if torch.cuda.is_available():
-        print("\nComparing memory usage with different search ranges:")
-        batch_size = 1
-        
-        # Test with small search ranges (our efficient approach)
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
-        model_small = EFNet_tracking(enable_tracking=True).cuda()
-        image_cuda = torch.randn(batch_size, C, H, W).cuda()
-        event_cuda = torch.randn(batch_size, 6, H, W).cuda()
-        
-        with torch.no_grad():
-            _ = model_small(image_cuda, event_cuda)
-        
-        small_memory = torch.cuda.max_memory_allocated() / (1024 ** 2)  # MB
-        print(f"With scale-dependent search ranges: {small_memory:.2f} MB")
-        
-        # Test with large search ranges (naive approach)
-        # This is a simulation - we're not actually modifying the model
-        # but we can estimate the memory usage
-        estimated_large_memory = small_memory * (8**2) / (4**2)  # Assuming 8x8 vs 4x4 search windows
-        print(f"Estimated with fixed large search ranges: {estimated_large_memory:.2f} MB")
-        print(f"Memory savings: {estimated_large_memory - small_memory:.2f} MB ({(1 - small_memory/estimated_large_memory)*100:.1f}%)")
-    
-    print("Test forward pass done!")
+    print("Test forward pass done!") 

@@ -169,7 +169,7 @@ class InlineTrackerBlock(nn.Module):
         self.lstm_c = None
 
 
-class EFNet_att_track_fusion(nn.Module):
+class EFNet_att_track_fusion_new(nn.Module):
     def __init__(
         self,
         in_chn=3,

@@ -51,54 +51,24 @@ class ConvLSTMCell(nn.Module):
 # ---------------------------
 class EfficientCorrelation(nn.Module):
     def __init__(self, max_displacement=4):
-        """
-        Memory-efficient correlation module with limited search window
-        Args:
-            max_displacement: Maximum displacement in each direction (search window is 2*max_displacement+1)
-        """
         super(EfficientCorrelation, self).__init__()
         self.max_displacement = max_displacement
-        self.search_range = 2 * max_displacement + 1
-        
+        self.window_size = 2 * max_displacement + 1
+
     def forward(self, x1, x2):
-        """
-        Compute correlation between x1 and x2 within a limited search window
-        Args:
-            x1: First feature map [B, C, H, W]
-            x2: Second feature map [B, C, H, W]
-        Returns:
-            Correlation volume [B, search_range*search_range, H, W]
-        """
-        B, C, H, W = x1.shape
-        
-        # Reshape for batch matrix multiplication
-        x1 = x1.view(B, C, H*W)
-        x2 = x2.view(B, C, H*W)
-        
-        # Compute correlation for the center position (no shift)
-        corr_center = torch.bmm(x1.transpose(1, 2), x2)  # [B, H*W, H*W]
-        
-        # Initialize correlation volume
-        corr_volume = torch.zeros(B, self.search_range**2, H, W, device=x1.device)
-        
-        # Fill correlation volume with limited search window
-        idx = 0
-        for dy in range(-self.max_displacement, self.max_displacement + 1):
-            for dx in range(-self.max_displacement, self.max_displacement + 1):
-                if dy == 0 and dx == 0:
-                    # Center position already computed
-                    corr_volume[:, idx] = corr_center.view(B, H, W, H, W)[:, :, :, :, :].diagonal(dim1=2, dim2=4).permute(0, 2, 1)
-                else:
-                    # Compute shifted correlation
-                    # This is a simplified version - in practice, you'd need to handle boundary conditions
-                    # and implement proper shifting of feature maps
-                    if abs(dy) <= H//2 and abs(dx) <= W//2:
-                        x2_shifted = torch.roll(x2.view(B, C, H, W), shifts=(dy, dx), dims=(2, 3)).view(B, C, H*W)
-                        corr_shifted = torch.bmm(x1.transpose(1, 2), x2_shifted)
-                        corr_volume[:, idx] = corr_shifted.view(B, H, W)
-                idx += 1
-        
-        return corr_volume
+        B, C, H, W = x2.size()
+        pad = self.max_displacement
+        # Pad x2 to handle boundary conditions properly
+        x2_padded = F.pad(x2, (pad, pad, pad, pad), mode='replicate')
+        # Unfold x2: shape [B, C*window_size**2, H*W]
+        x2_unfold = F.unfold(x2_padded, kernel_size=self.window_size)
+        # Reshape to [B, C, window_size**2, H, W]
+        x2_unfold = x2_unfold.view(B, C, self.window_size**2, H, W)
+        # Expand x1 to shape [B, C, 1, H, W]
+        x1_expanded = x1.unsqueeze(2)
+        # Compute correlation: [B, window_size**2, H, W]
+        corr = (x1_expanded * x2_unfold).sum(dim=1)
+        return corr
 
 
 # ---------------------------
@@ -108,7 +78,9 @@ class EfficientFlowEstimator(nn.Module):
     def __init__(self, in_channels, search_range=4):
         super(EfficientFlowEstimator, self).__init__()
         self.correlation = EfficientCorrelation(max_displacement=search_range)
-        corr_channels = (2 * search_range + 1) ** 2
+        # Use window_size for consistency with the new EfficientCorrelation implementation
+        window_size = 2 * search_range + 1
+        corr_channels = window_size ** 2
         
         # Flow estimation network
         self.flow_conv1 = nn.Conv2d(corr_channels + in_channels, 128, kernel_size=3, padding=1)
@@ -336,7 +308,7 @@ class EFNet_tracking(nn.Module):
         sam_feature, out_1 = self.sam12(x1, image)
 
         # stage 2 - Use out_1 (partially deblurred) as input instead of original image
-        x2 = self.conv_02(out_1)  # Changed from image to out_1
+        x2 = self.conv_02(image)
         x2 = self.cat12(torch.cat([x2, sam_feature], dim=1))
         blocks = []
         for i, down in enumerate(self.down_path_2):

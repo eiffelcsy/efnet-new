@@ -56,18 +56,41 @@ class EfficientCorrelation(nn.Module):
         self.window_size = 2 * max_displacement + 1
 
     def forward(self, x1, x2):
+        # Memory-efficient implementation with strided convolution
+        B, C, H, W = x2.size()
+        corr_tensor = []
+        
+        # Process in chunks to reduce memory
+        chunk_size = 16  # Process 16 channels at a time
+        for i in range(0, C, chunk_size):
+            end = min(i + chunk_size, C)
+            x1_chunk = x1[:, i:end]
+            x2_chunk = x2[:, i:end]
+            
+            # Compute correlation for this chunk
+            chunk_corr = self._compute_chunk_correlation(x1_chunk, x2_chunk)
+            corr_tensor.append(chunk_corr)
+            
+        # Average correlations from all chunks
+        corr = torch.mean(torch.stack(corr_tensor, dim=0), dim=0)
+        return corr
+        
+    def _compute_chunk_correlation(self, x1, x2):
         B, C, H, W = x2.size()
         pad = self.max_displacement
-        # Pad x2 to handle boundary conditions properly
         x2_padded = F.pad(x2, (pad, pad, pad, pad), mode='replicate')
-        # Unfold x2: shape [B, C*window_size**2, H*W]
-        x2_unfold = F.unfold(x2_padded, kernel_size=self.window_size)
-        # Reshape to [B, C, window_size**2, H, W]
-        x2_unfold = x2_unfold.view(B, C, self.window_size**2, H, W)
-        # Expand x1 to shape [B, C, 1, H, W]
-        x1_expanded = x1.unsqueeze(2)
-        # Compute correlation: [B, window_size**2, H, W]
-        corr = (x1_expanded * x2_unfold).sum(dim=1)
+        
+        # Use strided convolution approach instead of unfold
+        corr = torch.zeros(B, self.window_size**2, H, W, device=x1.device)
+        
+        # Compute correlation for each displacement
+        idx = 0
+        for dy in range(-self.max_displacement, self.max_displacement + 1):
+            for dx in range(-self.max_displacement, self.max_displacement + 1):
+                x2_shifted = x2_padded[:, :, pad+dy:pad+dy+H, pad+dx:pad+dx+W]
+                corr[:, idx] = (x1 * x2_shifted).sum(dim=1)
+                idx += 1
+                
         return corr
 
 

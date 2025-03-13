@@ -1,5 +1,5 @@
 # general settings
-name: EFNet_frame_att_fusion  # add debug for quick debug
+name: EFNet_tracking  # add debug for quick debug
 model_type: ImageEventRestorationModel
 scale: 1
 num_gpu:  1 #4
@@ -56,7 +56,7 @@ dataset_name: HighREV
 
 # network structures
 network_g:
-  type: EFNet_frame_att_fusion
+  type: EFNet_tracking
   wf: 64 
   fuse_before_downsample: true
 
@@ -114,8 +114,8 @@ logger:
   save_checkpoint_freq: !!float 2e4
   use_tb_logger: true
   wandb:
-    project: efnet-frame-att-fusion
-    resume_id: resume-frame-att-fusion-2
+    project: efnet-tracking
+    resume_id: resume-tracking-2
 
 # dist training settings
 dist_params:

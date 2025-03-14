@@ -50,16 +50,16 @@ val:
   crop_size: ~
   max_minibatch: 8
 
-  metrics:
-    psnr:
-      type: calculate_psnr
-      crop_border: 0
-      test_y_channel: false
+  # metrics:
+  #   psnr:
+  #     type: calculate_psnr
+  #     crop_border: 0
+  #     test_y_channel: false
 
-    ssim:
-      type: calculate_ssim
-      crop_border: 0
-      test_y_channel: false   
+  #   ssim:
+  #     type: calculate_ssim
+  #     crop_border: 0
+  #     test_y_channel: false   
 
 
 logger:

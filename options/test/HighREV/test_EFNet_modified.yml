@@ -1,5 +1,5 @@
 # general settings
-name: Test_EFNet_modified
+name: Test_EFNet_fusion
 model_type: TestImageEventRestorationModel
 scale: 1
 num_gpu: 1
@@ -12,8 +12,8 @@ datasets:
     type: VoxelnpzPngSingleDeblurDataset
 
     # dataroot: /cluster/work/cvl/leisun/Datasets/GOPRO_11_video_1skip_blur_multigt_mini/ # debug
-    dataroot: /common/scratch/users/e/eiffelchong.2023/HighREV/val
-    dataroot_voxel: /common/scratch/users/e/eiffelchong.2023/HighREV/val/voxel
+    dataroot: /common/scratch/users/e/eiffelchong.2023/HighREV_test
+    dataroot_voxel: /common/scratch/users/e/eiffelchong.2023/HighREV_test/voxel
 
     # voxel settings
     norm_voxel: true

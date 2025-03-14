@@ -195,10 +195,10 @@ class EFNet_modified(nn.Module):
         out_2 = self.last(x2)
         out_2 = out_2 + image
 
-        out_3 = self.fine_fusion(x2, out_2)  # added fine fusion stage 3
+        out_3 = self.fine_fusion(x2, out_1)  # added fine fusion stage 3
         out_3 = out_3 + image
 
-        return [out_1, out_3]
+        return [out_1, out_2, out_3]
 
     def get_input_chn(self, in_chn):
         return in_chn
@@ -366,18 +366,15 @@ class CoarseToFineFusionModule(nn.Module):
             feat_channels * 2, 3, kernel_size=3, padding=1, bias=True
         )
 
-    def forward(self, x2, out_2):
-        out_2_map = self.coarse_map(out_2)
+    def forward(self, x2, out_1):
+        out_1_map = self.coarse_map(out_1)
 
-        fused_in = torch.cat([x2, out_2_map], dim=1)
+        fused = torch.cat([x2, out_1_map], dim=1)
 
-        fused_1 = self.fusion_block_1(fused_in)
+        fused = self.fusion_block_1(fused)
+        fused = self.fusion_block_2(fused)
 
-        fused_1 = fused_1 + fused_in
-
-        fused_2 = self.fusion_block_2(fused_1)
-
-        out_3 = self.final_conv(fused_2)
+        out_3 = self.final_conv(fused)
 
         return out_3
 

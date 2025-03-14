@@ -378,44 +378,5 @@ class CoarseToFineFusionModule(nn.Module):
 
         return out_3
 
-
-class ChannelAttentionBlock(nn.Module):
-    def __init__(
-        self, n_feat, reduction=16, bias=True, act=nn.ReLU(True), res_scale=1.0
-    ):
-        super(ChannelAttentionBlock, self).__init__()
-
-        self.res_scale = res_scale
-
-        self.conv1 = nn.Conv2d(n_feat, n_feat, kernel_size=3, padding=1, bias=bias)
-        self.act = act
-        self.conv2 = nn.Conv2d(n_feat, n_feat, kernel_size=3, padding=1, bias=bias)
-        self.ca_conv1 = nn.Conv2d(
-            n_feat, n_feat // reduction, kernel_size=1, padding=0, bias=True
-        )
-        self.ca_conv2 = nn.Conv2d(
-            n_feat // reduction, n_feat, kernel_size=1, padding=0, bias=True
-        )
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        residual = x
-        out = self.conv1(x)
-        out = self.act(out)
-        out = self.conv2(out)
-
-        ca_avg = out.mean(dim=[2, 3], keepdim=True)
-
-        ca_down = self.act(self.ca_conv1(ca_avg))
-        ca_up = self.sigmoid(self.ca_conv2(ca_down))
-
-        out = out * ca_up
-
-        out = out * self.res_scale
-
-        out = out + residual
-        return out
-
-
 if __name__ == "__main__":
     pass

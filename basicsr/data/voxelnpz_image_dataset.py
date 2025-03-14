@@ -164,7 +164,10 @@ class VoxelnpzPngSingleDeblurTestDataset(data.Dataset):
         blur_frames = sorted(recursive_glob(rootdir=os.path.join(self.dataroot, 'blur'), suffix='.png'))
         blur_frames = [os.path.join(self.dataroot, 'blur', blur_frame) for blur_frame in blur_frames]
         
+        print(self.dataroot_voxel)
         event_frames = sorted(recursive_glob(rootdir=self.dataroot_voxel, suffix='.npz'))
+        print(len(event_frames))
+        print(event_frames)
         event_frames = [os.path.join(self.dataroot_voxel, event_frame) for event_frame in event_frames]
         
         assert len(blur_frames) == len(event_frames), f"Mismatch in blur ({len(blur_frames)}) and event ({len(event_frames)}) frame counts."

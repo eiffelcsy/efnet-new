@@ -243,7 +243,7 @@ class EFNet_AttTracking_CABFusion(nn.Module):
 
         self.cat12 = nn.Conv2d(prev_channels * 2, prev_channels, 1, 1, 0)
 
-        self.fine_fusion = CoarseToFineFusionModule(channels=wf)
+        self.fine_fusion = CoarseToFineFusionModule(feat_channels=wf)
 
         self.coarse_map = nn.Conv2d(3, wf, kernel_size=1, padding=0)
         self.coarse_unmap = nn.Conv2d(wf, 3, kernel_size=3, padding=1)

@@ -9,7 +9,7 @@ manual_seed: 10
 datasets:
   test:
     name: highrev-test
-    type: VoxelnpzPngSingleDeblurDataset
+    type: VoxelnpzPngSingleDeblurTestDataset
 
     # dataroot: /cluster/work/cvl/leisun/Datasets/GOPRO_11_video_1skip_blur_multigt_mini/ # debug
     dataroot: /common/scratch/users/e/eiffelchong.2023/HighREV_test
@@ -21,7 +21,7 @@ datasets:
     io_backend:
       type: disk
 
-    gt_size: None
+    gt_size: ~
     use_hflip: false
     use_rot: false
 

@@ -127,3 +127,87 @@ class VoxelnpzPngSingleDeblurDataset(data.Dataset):
 
     def __len__(self):
         return len(self.dataPath)
+
+
+# ... existing code ...
+
+class VoxelnpzPngSingleDeblurTestDataset(data.Dataset):
+    """Test-only paired voxel(npz) and blurry image (png) dataset for event-based single image deblurring.
+    Doesn't require ground truth sharp images.
+    
+    --TestData
+    |----blur
+    |    |----SEQNAME_%5d.png
+    |    |----...
+    |----voxel
+    |    |----SEQNAME_%5d.npz
+    |    |----...
+    
+    Args:
+        opt (dict): Config for test dataset. It contains the following keys:
+            dataroot (str): Data root path for blur images.
+            dataroot_voxel (str): Data root path for voxel data.
+            io_backend (dict): IO backend type and other kwarg.
+            phase (str): 'test'
+            norm_voxel (bool): Whether to normalize voxel data.
+            scale (bool): Scale, which will be added automatically.
+    """
+
+    def __init__(self, opt):
+        super(VoxelnpzPngSingleDeblurTestDataset, self).__init__()
+        self.opt = opt
+        self.dataroot = Path(opt['dataroot'])
+        self.dataroot_voxel = Path(opt['dataroot_voxel'])
+        self.norm_voxel = opt['norm_voxel']
+        self.dataPath = []
+
+        blur_frames = sorted(recursive_glob(rootdir=os.path.join(self.dataroot, 'blur'), suffix='.png'))
+        blur_frames = [os.path.join(self.dataroot, 'blur', blur_frame) for blur_frame in blur_frames]
+        
+        event_frames = sorted(recursive_glob(rootdir=self.dataroot_voxel, suffix='.npz'))
+        event_frames = [os.path.join(self.dataroot_voxel, event_frame) for event_frame in event_frames]
+        
+        assert len(blur_frames) == len(event_frames), f"Mismatch in blur ({len(blur_frames)}) and event ({len(event_frames)}) frame counts."
+
+        for i in range(len(blur_frames)):
+            self.dataPath.append({
+                'blur_path': blur_frames[i],
+                'event_paths': event_frames[i],
+            })
+        logger = get_root_logger()
+        logger.info(f"Test dataset initialized with {len(self.dataPath)} samples.")
+
+        # file client (io backend)
+        self.file_client = None
+        self.io_backend_opt = opt['io_backend']
+
+    def __getitem__(self, index):
+        if self.file_client is None:
+            self.file_client = FileClient(self.io_backend_opt.pop('type'), **self.io_backend_opt)
+        
+        image_path = self.dataPath[index]['blur_path']
+        event_path = self.dataPath[index]['event_paths']
+
+        # get LQ (blurry image)
+        img_bytes = self.file_client.get(image_path)
+        img_lq = imfrombytes(img_bytes, float32=True)
+
+        # get voxel data
+        voxel = np.load(event_path)['voxel']
+
+        # No data augmentation for testing
+        
+        # Convert to tensor
+        img_lq = img2tensor(img_lq)
+        voxel = torch.from_numpy(np.ascontiguousarray(voxel)).permute(2, 0, 1).float()
+
+        # Normalize voxel if needed
+        if self.norm_voxel:
+            voxel = voxel_norm(voxel)
+
+        origin_index = os.path.basename(image_path).split('.')[0]
+
+        return {'frame': img_lq, 'voxel': voxel, 'image_name': origin_index}
+
+    def __len__(self):
+        return len(self.dataPath)

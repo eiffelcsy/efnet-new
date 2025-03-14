@@ -57,7 +57,7 @@ class SAM(nn.Module):
         return x1, img
 
 
-class EFNet_modified(nn.Module):
+class EFNet_CABFusion(nn.Module):
     def __init__(
         self,
         in_chn=3,
@@ -68,7 +68,7 @@ class EFNet_modified(nn.Module):
         relu_slope=0.2,
         num_heads=[1, 2, 4],
     ):
-        super(EFNet_modified, self).__init__()
+        super(EFNet_CABFusion, self).__init__()
         self.depth = depth
         self.fuse_before_downsample = fuse_before_downsample
         self.num_heads = num_heads

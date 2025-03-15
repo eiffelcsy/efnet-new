@@ -1,5 +1,5 @@
 # general settings
-name: EFNet_CABFusion # add debug for quick debug
+name: EFNet_att_track_freq_fusion # add debug for quick debug
 model_type: ImageEventRestorationModel
 scale: 1
 num_gpu:  1 #4
@@ -56,7 +56,7 @@ dataset_name: HighREV
 
 # network structures
 network_g:
-  type: EFNet_CABFusion  
+  type: EFNet_att_track_freq_fusion  
   wf: 64 
   fuse_before_downsample: true
 
@@ -114,8 +114,8 @@ logger:
   save_checkpoint_freq: !!float 2e4
   use_tb_logger: true
   wandb:
-    project: efnet-cab-fusion
-    resume_id: resume-cab-fusion-0
+    project: efnet-att-track-freq-fusion
+    resume_id: resume-att-track-freq-fusion-0
 
 # dist training settings
 dist_params:

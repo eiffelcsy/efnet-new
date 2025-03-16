@@ -1,5 +1,5 @@
 # general settings
-name: EFNet_att_tracking_cab_fusion_enhanced # add debug for quick debug
+name: EFNet_AttTracking_CABFusion_enhanced # add debug for quick debug
 model_type: ImageEventRestorationModel
 scale: 1
 num_gpu:  2 #4
@@ -56,7 +56,7 @@ dataset_name: HighREV
 
 # network structures
 network_g:
-  type: EFNet_att_tracking_cab_fusion_enhanced  
+  type: EFNet_AttTracking_CABFusion_enhanced  
   wf: 64 
   fuse_before_downsample: true
 

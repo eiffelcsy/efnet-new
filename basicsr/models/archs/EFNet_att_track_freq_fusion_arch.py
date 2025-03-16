@@ -556,8 +556,11 @@ class BidirectionalFrameFusionBlock(nn.Module):
 class FCFE(nn.Module):
     def __init__(self, channels):
         super(FCFE, self).__init__()
-        #self.norm_event = nn.LayerNorm([channels, 256, 256])
-        #self.norm_image = nn.LayerNorm([channels, 256, 256])
+        # Instead of setting to None, create the LayerNorm layers with default size
+        # This ensures the parameters exist in the state_dict
+        self.norm_event = nn.LayerNorm([channels, 256, 256])  # Use a default size
+        self.norm_image = nn.LayerNorm([channels, 256, 256])  # Use a default size
+        
         self.conv1x1_1 = nn.Conv2d(channels * 2, channels, kernel_size=1)
         self.dw_conv_1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, groups=channels)
         self.dw_conv_2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, groups=channels)
@@ -580,64 +583,53 @@ class FCFE(nn.Module):
         self.geglu = nn.GELU()
 
     def forward(self, event_features, image_features):
-        #print("event_features, image_features", event_features.size(), image_features.size())
-        
         device = event_features.device
-        #print(device)
-
         batch_size, channels, height, width = event_features.shape
-        self.norm_event = nn.LayerNorm([channels, height, width]).to(device)
-        self.norm_image = nn.LayerNorm([channels, height, width]).to(device)
+        
+        if self.norm_event.normalized_shape != [channels, height, width]:
+            self.norm_event = nn.LayerNorm([channels, height, width]).to(device)
+            self.norm_image = nn.LayerNorm([channels, height, width]).to(device)
 
         x1 = self.norm_event(event_features)
         x2 = self.norm_image(image_features)
-        #print("x1, x2", x1.size(), x2.size())
+        
         x3 = self.conv1x1_1(torch.cat([x1, x2], dim=1))
-        #print("x3", x3.size())
+        
         x4 = torch.fft.fft2(self.dw_conv_1(x3))
-        #print("x4", x4.size())
+        
         real = F.relu(self.conv1x1_real(x4.real))
         imag = F.relu(self.conv1x1_imag(x4.imag))
-        #print("x4 - real and imag", real.size(), imag.size())
+        
         x5 = self.sigmoid(self.conv1x1_5(torch.cat([real, imag], dim=1)))
-        #print("x5", x5.size())
+        
         x6 = torch.fft.fft2(self.dw_conv_2(self.conv1x1_2(x2)))
-        #print("x6", x6.size())
+        
         product = x5 * x6
         product_real = self.conv1x1_3_real(F.relu(self.conv1x1_4_real(product.real)))
         product_imag = self.conv1x1_3_imag(F.relu(self.conv1x1_4_imag(product.imag)))
-        #x7 = torch.fft.ifft2(self.conv1x1_3(F.relu(self.conv1x1_4((x5 * x6).real)))).real
+        
         x7 = torch.fft.ifft2(torch.complex(product_real, product_imag))
-        #print("x7", x7.size())
-        #x_check = torch.reshape(x7, (x7.shape[0] * x7.shape[1], x7.shape[2], x7.shape[3]))
-        #x7 = torch.cat([x7.real, x7.imag], dim = 1)
-        #print("x7_concat", x7.size())
+        
         x8 = torch.fft.fft(torch.reshape(x7, (x7.shape[0] * x7.shape[1], x7.shape[2], x7.shape[3])))
-        #print("x8", x8.size())
+        
         x9 = self.filter_generation(self.channel_attention(x7.real + x3 + x7.imag))
         x9 = torch.reshape(x9, (x9.shape[0]*x9.shape[1], x9.shape[2], x9.shape[3]))
-        #print("x9", x9.size())
+        
         x10_real = torch.reshape(torch.fft.ifft(x8 * x9), x7.shape).real
         x10_imag = torch.reshape(torch.fft.ifft(x8 * x9), x7.shape).imag
         x10 = torch.complex(x10_real, x10_imag)
-        #print("x10", x10.size())
 
         x10_batch_size, x10_channels, x10_height, x10_width = x10.shape
         x10_reshaped = x10.permute(0,2,3,1).reshape(x10_batch_size,x10_height*x10_width, x10_channels)
         x1_reshaped = self.conv1x1_6(x1).permute(0, 2, 3, 1).reshape(x10_batch_size, x10_height*x10_width, x10_channels)
 
         x_cross_real, _  = self.cross_attention_real(x10_reshaped.real, x1_reshaped, x1_reshaped)
-        #print("x_cross_imag", x_cross_real.size())
         x_cross_real = x_cross_real.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2)
-        #print("x_cross", x_cross.size())
 
         x_cross_imag, _  = self.cross_attention_imag(x10_reshaped.imag, x1_reshaped, x1_reshaped)
-        #print("x_cross_imag", x_cross_imag.size())
         x_cross_imag = x_cross_imag.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2)
-        #print("x_cross", x_cross.size())
 
         x11 = self.conv1x1_7(self.geglu(self.dw_conv_3(torch.complex(x_cross_real, x_cross_imag).abs())))
-        #print("x11", x11.size())
         output = x11 + x2
 
         return output

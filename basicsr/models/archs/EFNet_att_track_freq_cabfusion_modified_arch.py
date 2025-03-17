@@ -586,8 +586,8 @@ class ChannelAttentionBlock(nn.Module):
 class FCFE(nn.Module):
     def __init__(self, channels):
         super(FCFE, self).__init__()
-        # self.norm_event = nn.LayerNorm([channels, 256, 256])  
-        # self.norm_image = nn.LayerNorm([channels, 256, 256])  
+        self.norm_event = nn.LayerNorm([channels, 256, 256])  
+        self.norm_image = nn.LayerNorm([channels, 256, 256])  
         self.conv1x1_1 = nn.Conv2d(channels * 2, channels, kernel_size=1)
         self.dw_conv_1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, groups=channels)
         self.dw_conv_2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, groups=channels)
@@ -614,8 +614,10 @@ class FCFE(nn.Module):
         device = event_features.device
         #print(device)
         batch_size, channels, height, width = event_features.shape
-        self.norm_event = nn.LayerNorm([channels, height, width]).to(device)
-        self.norm_image = nn.LayerNorm([channels, height, width]).to(device)
+
+        if self.norm_event.normalized_shape != [channels, height, width]:
+            self.norm_event = nn.LayerNorm([channels, height, width]).to(device)
+            self.norm_image = nn.LayerNorm([channels, height, width]).to(device)
         x1 = self.norm_event(event_features)
         x2 = self.norm_image(image_features)
         

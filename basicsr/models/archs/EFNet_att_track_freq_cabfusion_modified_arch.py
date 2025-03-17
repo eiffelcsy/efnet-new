@@ -328,7 +328,7 @@ class EFNet_att_track_freq_cabfusion_modified(nn.Module):
         out_2 = self.last(x2)
         out_2 = out_2 + image
 
-        fused_coarse, fused_feat = self.fine_fusion(out_2, x2)
+        fused_coarse, fused_feat = self.fine_fusion(x2, out_2)
         out_3 = self.last(fused_feat)
         out_3 = out_3 + image
 

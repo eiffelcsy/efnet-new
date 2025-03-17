@@ -28,7 +28,7 @@ datasets:
     # data loader settings
     use_shuffle: true
     num_worker_per_gpu: 3
-    batch_size_per_gpu: 4 # 4 for 2080, 8 for titan
+    batch_size_per_gpu: 6 # 4 for 2080, 8 for titan
     dataset_enlarge_ratio: 2  # accelarate, equals to the num_gpu
     prefetch_mode: cpu
     num_prefetch_queue: 2
@@ -94,7 +94,7 @@ val:
   val_freq: !!float 2e4 # 2e4
   save_img: false  
   grids: ~  
-  crop_size: ~ # use it of the gpu memory is not enough for whole image inference
+  crop_size: 64 # use it of the gpu memory is not enough for whole image inference
   max_minibatch: 8  
 
   metrics:

@@ -175,7 +175,7 @@ class EFNet_att_track_freq_cabfusion_modified(nn.Module):
         depth=3,
         fuse_before_downsample=True,
         relu_slope=0.2,
-        num_heads=[1, 2, 4],
+        num_heads=[1, 1, 2],
         use_tracking=True,
     ):
         super(EFNet_att_track_freq_cabfusion_modified, self).__init__()

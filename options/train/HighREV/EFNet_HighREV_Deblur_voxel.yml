@@ -2,7 +2,7 @@
 name: EFNet_att_track_freq_fusion # add debug for quick debug
 model_type: ImageEventRestorationModel
 scale: 1
-num_gpu:  2 #4
+num_gpu:  1 #4
 manual_seed: 10
 
 datasets:
@@ -29,7 +29,7 @@ datasets:
     use_shuffle: true
     num_worker_per_gpu: 3
     batch_size_per_gpu: 4 # 4 for 2080, 8 for titan
-    dataset_enlarge_ratio: 2  # accelarate, equals to the num_gpu
+    dataset_enlarge_ratio: 1  # accelarate, equals to the num_gpu
     prefetch_mode: cpu
     num_prefetch_queue: 2
 

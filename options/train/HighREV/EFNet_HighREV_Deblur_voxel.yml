@@ -114,8 +114,8 @@ logger:
   save_checkpoint_freq: !!float 2e4
   use_tb_logger: true
   wandb:
-    project: efnet-att-tracking-freq-fusion
-    resume_id: resume-att-tracking-freq-fusion-0
+    project: efnet-att-track-freq-fusion
+    resume_id: resume-att-track-freq-fusion-0
 
 # dist training settings
 dist_params:

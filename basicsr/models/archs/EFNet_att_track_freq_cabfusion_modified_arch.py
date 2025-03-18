@@ -586,8 +586,8 @@ class ChannelAttentionBlock(nn.Module):
 class FCFE(nn.Module):
     def __init__(self, channels):
         super(FCFE, self).__init__()
-        self.norm_event = nn.LayerNorm([channels, 256, 256])  
-        self.norm_image = nn.LayerNorm([channels, 256, 256])  
+        self.norm_event = nn.LayerNorm([channels])  
+        self.norm_image = nn.LayerNorm([channels])  
         self.conv1x1_1 = nn.Conv2d(channels * 2, channels, kernel_size=1)
         self.dw_conv_1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, groups=channels)
         self.dw_conv_2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, groups=channels)
@@ -614,11 +614,18 @@ class FCFE(nn.Module):
         device = event_features.device
         #print(device)
         batch_size, channels, height, width = event_features.shape
-        if self.norm_event.normalized_shape != [channels, height, width]:
-            self.norm_event = nn.LayerNorm([channels, height, width]).to(device)
-            self.norm_image = nn.LayerNorm([channels, height, width]).to(device)
+        if self.norm_event.normalized_shape != [channels]:
+            self.norm_event = nn.LayerNorm([channels]).to(device)
+            self.norm_image = nn.LayerNorm([channels]).to(device)
+
+        x1 = event_features.permute(0, 2, 3, 1)  # [B, H, W, C]
+        x2 = image_features.permute(0, 2, 3, 1)  # [B, H, W, C]
+        
         x1 = self.norm_event(event_features)
         x2 = self.norm_image(image_features)
+
+        x1 = x1.permute(0, 3, 1, 2)  # [B, C, H, W]
+        x2 = x2.permute(0, 3, 1, 2)  # [B, C, H, W]
         
         x3 = self.conv1x1_1(torch.cat([x1, x2], dim=1))
         

@@ -67,8 +67,8 @@ logger:
   save_checkpoint_freq: !!float 2e4
   use_tb_logger: true
   wandb:
-    project: efnet_att_track_fusion_new_test
-    resume_id: efnet_att_track_fusion_new_test
+    project: efnet_atttrack_cabfusion_enhanced_test
+    resume_id: resume-efnet_atttrack_cabfusion_enhanced_test
 
 # dist test settings
 dist_params:

@@ -307,6 +307,10 @@ class EFNet_att_multiscale_track_fusion(nn.Module):
                     merge_before_downsample=self.fuse_before_downsample,
                     event_feat=ev_features[i] if self.use_tracking else None,
                 )
+
+                if self.use_tracking and hasattr(down, 'feature_tracker'):
+                    tracked_features.append(x1_up)
+
                 encs.append(x1_up)
 
                 if mask is not None:

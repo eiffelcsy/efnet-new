@@ -29,14 +29,14 @@ dataset_name: HighREV
 
 # network structures
 network_g:
-  type: EFNet_att_track_freq_cabfusion_modified
+  type: EFNet_AttTracking_CABFusion_enhanced
   wf: 64 
   fuse_before_downsample: true
 
 
 # path
 path:
-  pretrain_network_g: /common/home/users/e/eiffelchong.2023/efnet-new/experiments/EFNet_att_track_freq_cabfusion_modified/models/net_g_200000.pth
+  pretrain_network_g: /common/home/users/e/eiffelchong.2023/efnet-new/experiments/EFNet_AttTracking_CABFusion_enhanced/models/net_g_200000.pth
   strict_load_g: true
   resume_state: ~
   # training_states: ~
@@ -67,8 +67,8 @@ logger:
   save_checkpoint_freq: !!float 2e4
   use_tb_logger: true
   wandb:
-    project: efnet_att_track_freq_cabfusion_modified_test
-    resume_id: efnet_att_track_freq_cabfusion_modified_test
+    project: efnet-atttrack-cabfusion-enhanced-test
+    resume_id: resume-efnet-atttrack-cabfusion-enhanced-test
 
 # dist test settings
 dist_params:

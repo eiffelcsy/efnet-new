@@ -621,8 +621,8 @@ class FCFE(nn.Module):
         x1 = event_features.permute(0, 2, 3, 1)  # [B, H, W, C]
         x2 = image_features.permute(0, 2, 3, 1)  # [B, H, W, C]
         
-        x1 = self.norm_event(event_features)
-        x2 = self.norm_image(image_features)
+        x1 = self.norm_event(x1)
+        x2 = self.norm_image(x2)
 
         x1 = x1.permute(0, 3, 1, 2)  # [B, C, H, W]
         x2 = x2.permute(0, 3, 1, 2)  # [B, C, H, W]

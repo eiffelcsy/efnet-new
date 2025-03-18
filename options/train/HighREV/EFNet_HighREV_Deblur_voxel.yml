@@ -115,7 +115,7 @@ logger:
   use_tb_logger: true
   wandb:
     project: efnet-att-multiscale-track-fusion
-    resume_id: resume-att-multiscale-track-fusion-0
+    resume_id: resume-att-multiscale-track-fusion-1
 
 # dist training settings
 dist_params:

@@ -175,7 +175,7 @@ class EFNet_att_track_freq_cabfusion_modified(nn.Module):
         depth=3,
         fuse_before_downsample=True,
         relu_slope=0.2,
-        num_heads=[1, 1, 2],
+        num_heads=[1, 2, 4],
         use_tracking=True,
     ):
         super(EFNet_att_track_freq_cabfusion_modified, self).__init__()
@@ -614,7 +614,6 @@ class FCFE(nn.Module):
         device = event_features.device
         #print(device)
         batch_size, channels, height, width = event_features.shape
-
         if self.norm_event.normalized_shape != [channels, height, width]:
             self.norm_event = nn.LayerNorm([channels, height, width]).to(device)
             self.norm_image = nn.LayerNorm([channels, height, width]).to(device)

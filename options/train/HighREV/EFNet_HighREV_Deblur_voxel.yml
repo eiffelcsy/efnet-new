@@ -71,22 +71,22 @@ path:
 train:
   optim_g:
     type: AdamW
-    lr: !!float 2e-4
+    lr: !!float 1e-4
     weight_decay: !!float 1e-4
-    betas: [0.9, 0.99]
+    betas: [0.9, 0.999]
 
   scheduler:
     type: TrueCosineAnnealingLR
-    T_max: 200000 
+    T_max: 400000 
     eta_min: !!float 1e-7
 
-  total_iter: 200000
-  warmup_iter: -1 # no warm up
+  total_iter: 400000
+  warmup_iter: 1000 # no warm up
 
   # losses
   pixel_opt:
     type: PSNRLoss
-    loss_weight: 0.5
+    loss_weight: 1.0
     reduction: mean
 
 # validation settings
@@ -115,7 +115,7 @@ logger:
   use_tb_logger: true
   wandb:
     project: efnet-att-multiscale-track-fusion
-    resume_id: resume-att-multiscale-track-fusion-1
+    resume_id: resume-att-multiscale-track-fusion-2
 
 # dist training settings
 dist_params:

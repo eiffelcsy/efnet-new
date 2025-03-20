@@ -169,7 +169,7 @@ class InlineTrackerBlock(nn.Module):
         self.lstm_c = None
 
 
-class EFNet_att_track_fusion_new(nn.Module):
+class EFNet_att_track_fusion_new_second(nn.Module):
     def __init__(
         self,
         in_chn=3,
@@ -181,7 +181,7 @@ class EFNet_att_track_fusion_new(nn.Module):
         num_heads=[1, 2, 4],
         use_tracking=True,
     ):
-        super(EFNet_att_track_fusion_new, self).__init__()
+        super(EFNet_att_track_fusion_new_second, self).__init__()
         self.depth = depth
         self.fuse_before_downsample = fuse_before_downsample
         self.num_heads = num_heads
@@ -554,7 +554,7 @@ if __name__ == "__main__":
     B, C, H, W = 1, 3, 256, 256
     image = torch.randn(B, C, H, W)
     event = torch.randn(B, 6, H, W)
-    model = EFNet_att_track_fusion_new()
+    model = EFNet_att_track_fusion_new_second()
     outs = model(image, event)
     for i, o in enumerate(outs, start=1):
         print(f"Output {i} shape: {o.shape}")

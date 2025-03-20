@@ -115,7 +115,7 @@ logger:
   use_tb_logger: true
   wandb:
     project: efnet-att-track-fusion-new
-    resume_id: resume-att-track-fusion-new-1
+    resume_id: resume-att-track-fusion-new-2
 
 # dist training settings
 dist_params:

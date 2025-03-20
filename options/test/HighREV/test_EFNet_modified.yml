@@ -1,5 +1,5 @@
 # general settings
-name: Test_EFNet_AttTracking_CABFusion_enhanced
+name: Test_EFNet_att_track_fusion_new
 model_type: TestImageEventRestorationModel
 scale: 1
 num_gpu: 1
@@ -12,8 +12,8 @@ datasets:
     type: VoxelnpzPngSingleDeblurTestDataset
 
     # dataroot: /cluster/work/cvl/leisun/Datasets/GOPRO_11_video_1skip_blur_multigt_mini/ # debug
-    dataroot: /common/scratch/users/e/eiffelchong.2023/HighREV_test
-    dataroot_voxel: /common/scratch/users/e/eiffelchong.2023/HighREV_test/voxel
+    dataroot: /common/scratch/users/e/eiffelchong.2023/HighREV/train/
+    dataroot_voxel: /common/scratch/users/e/eiffelchong.2023/HighREV/train/voxel
 
     # voxel settings
     norm_voxel: true
@@ -29,14 +29,14 @@ dataset_name: HighREV
 
 # network structures
 network_g:
-  type: EFNet_AttTracking_CABFusion_enhanced
+  type: EFNet_att_track_fusion_new
   wf: 64 
   fuse_before_downsample: true
 
 
 # path
 path:
-  pretrain_network_g: /common/home/users/e/eiffelchong.2023/efnet-new/experiments/EFNet_AttTracking_CABFusion_enhanced/models/net_g_200000.pth
+  pretrain_network_g: /common/home/users/e/eiffelchong.2023/efnet-new/experiments/EFNet_att_track_fusion_new/models/net_g_200000.pth
   strict_load_g: true
   resume_state: ~
   # training_states: ~
@@ -67,8 +67,8 @@ logger:
   save_checkpoint_freq: !!float 2e4
   use_tb_logger: true
   wandb:
-    project: efnet-atttrack-cabfusion-enhanced-test
-    resume_id: resume-efnet-atttrack-cabfusion-enhanced-test
+    project: efnet-atttrack-fusion-new-test
+    resume_id: resume-efnet-atttrack-fusion-new-test
 
 # dist test settings
 dist_params:

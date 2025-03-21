@@ -1,5 +1,5 @@
 # general settings
-name: Test_EFNet_att_track_fusion_new
+name: Test_EFNet_att_track_fusion_new_second
 model_type: TestImageEventRestorationModel
 scale: 1
 num_gpu: 1
@@ -12,8 +12,8 @@ datasets:
     type: VoxelnpzPngSingleDeblurTestDataset
 
     # dataroot: /cluster/work/cvl/leisun/Datasets/GOPRO_11_video_1skip_blur_multigt_mini/ # debug
-    dataroot: /common/scratch/users/e/eiffelchong.2023/HighREV/train/
-    dataroot_voxel: /common/scratch/users/e/eiffelchong.2023/HighREV/train/voxel
+    dataroot: /common/scratch/users/e/eiffelchong.2023/HighREV_test
+    dataroot_voxel: /common/scratch/users/e/eiffelchong.2023/HighREV_test/voxel
 
     # voxel settings
     norm_voxel: true
@@ -29,14 +29,14 @@ dataset_name: HighREV
 
 # network structures
 network_g:
-  type: EFNet_att_track_fusion_new
+  type: EFNet_att_track_fusion_new_second
   wf: 64 
   fuse_before_downsample: true
 
 
 # path
 path:
-  pretrain_network_g: /common/home/users/e/eiffelchong.2023/efnet-new/experiments/EFNet_att_track_fusion_new/models/net_g_200000.pth
+  pretrain_network_g: /common/home/users/e/eiffelchong.2023/efnet-new/experiments/EFNet_att_track_fusion_new_second/models/net_g_100000.pth
   strict_load_g: true
   resume_state: ~
   # training_states: ~
